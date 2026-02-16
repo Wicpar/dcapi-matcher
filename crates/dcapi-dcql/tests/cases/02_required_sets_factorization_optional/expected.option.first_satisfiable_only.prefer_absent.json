@@ -1,0 +1,11 @@
+{
+  "result": "plan",
+  "configs": [
+    ["pid"],
+    ["nice_to_have", "pid"]
+  ],
+  "query_matches": {
+    "pid": { "credentials": ["sd_pid"], "selected_claim_ids": [] },
+    "nice_to_have": { "credentials": ["sd_nice"], "selected_claim_ids": [] }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "credentials": [
+    {
+      "id": "x",
+      "format": "jwt_vc_json",
+      "meta": { "vct_values": ["vct:any"] }
+    }
+  ]
+}

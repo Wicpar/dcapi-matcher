@@ -1,0 +1,18 @@
+{
+  "result": "plan",
+  "configs": [
+    ["nice_to_have", "pid"],
+    ["pid"],
+    ["nice_to_have", "other_pid"],
+    ["other_pid"],
+    ["nice_to_have", "pid_reduced_cred_1", "pid_reduced_cred_2"],
+    ["pid_reduced_cred_1", "pid_reduced_cred_2"]
+  ],
+  "query_matches": {
+    "pid": { "credentials": ["sd_pid"], "selected_claim_ids": [] },
+    "other_pid": { "credentials": ["sd_other_pid"], "selected_claim_ids": [] },
+    "pid_reduced_cred_1": { "credentials": ["sd_red1"], "selected_claim_ids": [] },
+    "pid_reduced_cred_2": { "credentials": ["sd_red2"], "selected_claim_ids": [] },
+    "nice_to_have": { "credentials": ["sd_nice"], "selected_claim_ids": [] }
+  }
+}

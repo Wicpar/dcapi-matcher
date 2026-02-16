@@ -1,0 +1,5 @@
+{
+  "result": "error",
+  "error": "InvalidQuery",
+  "message": "unsupported credential format in dcql_query.credentials entry"
+}

@@ -1,0 +1,13 @@
+[package]
+name = "ubique-matcher-format"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+android-credman = { workspace = true, features = ["test-shim"] }
+dcapi-dcql = { workspace = true }
+dcapi-matcher = { path = "../.." }
+serde_json = { workspace = true }

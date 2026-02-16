@@ -1,0 +1,10 @@
+{
+  "credentials": [
+    {
+      "id": "pid",
+      "format": "dc+sd-jwt",
+      "meta": { "vct_values": ["vct:pid"] },
+      "require_cryptographic_holder_binding": false
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+[package]
+name = "dcapi-matcher-tracing"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+android-credman = { workspace = true }
+tracing = { version = "0.1", default-features = false }
+tracing-core = { version = "0.1", default-features = false }
+spin = "0.9"
+
+[features]
+std = ["tracing/std", "tracing-core/std"]
+
+[dev-dependencies]
+android-credman = { workspace = true, features = ["test-shim"] }
+tracing = { version = "0.1", default-features = false }

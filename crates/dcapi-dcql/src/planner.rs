@@ -1,0 +1,1049 @@
+use crate::models::{
+    ClaimsQuery, CredentialQuery, CredentialSetQuery, DcqlQuery, Meta, TransactionData,
+    TrustedAuthority,
+};
+use crate::path::{ClaimsPathPointer, PathElement, is_mdoc_path};
+use crate::store::{CredentialFormat, CredentialStore, ValueMatch};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use thiserror::Error;
+
+/// Resolved matching context for one Credential Query id.
+#[derive(Debug, Clone)]
+pub struct QueryMatches<C> {
+    /// Credential Query id.
+    pub id: String,
+    /// Requested credential format.
+    pub format: CredentialFormat,
+    /// Parsed typed `meta` object.
+    pub meta: Meta,
+    /// Whether multiple presentations are allowed in the response.
+    pub multiple: bool,
+    /// Whether cryptographic holder binding is required.
+    pub require_holder_binding: bool,
+    /// Trusted authority constraints copied from query.
+    pub trusted_authorities: Option<Vec<TrustedAuthority>>,
+    /// Claims selected after evaluating `claims` / `claim_sets`.
+    pub selected_claims: Vec<ClaimsQuery>,
+    /// Candidate credential references that satisfy this query.
+    pub credentials: Vec<C>,
+}
+
+/// How to choose options inside each Credential Set Query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialSetOptionMode {
+    /// Keep all satisfiable options.
+    AllSatisfiable,
+    /// Keep only the first satisfiable option in declared order.
+    FirstSatisfiableOnly,
+}
+
+/// How optional Credential Set Queries are incorporated into alternatives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptionalCredentialSetsMode {
+    /// Prefer including satisfiable optional sets first, then alternatives without them.
+    PreferPresent,
+    /// Prefer omitting optional sets first, then alternatives that include them.
+    PreferAbsent,
+    /// If an optional set is satisfiable, always include one option for it.
+    AlwaysPresentIfSatisfiable,
+}
+
+/// Planner configuration knobs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanOptions {
+    /// Option-selection policy for each Credential Set Query.
+    pub credential_set_option_mode: CredentialSetOptionMode,
+    /// Inclusion policy for optional Credential Set Queries.
+    pub optional_credential_sets_mode: OptionalCredentialSetsMode,
+}
+
+impl Default for PlanOptions {
+    fn default() -> Self {
+        Self {
+            credential_set_option_mode: CredentialSetOptionMode::AllSatisfiable,
+            optional_credential_sets_mode: OptionalCredentialSetsMode::PreferPresent,
+        }
+    }
+}
+
+/// One entry in an inner selection set.
+#[derive(Debug, Clone)]
+pub struct SelectionEntry<C> {
+    /// Whether this credential id is mandatory across all alternatives.
+    pub required: bool,
+    /// Query context and selectable credential candidates for this id.
+    pub query: QueryMatches<C>,
+    /// Transaction data indices that are bound to this credential id in this alternative.
+    pub transaction_data_indices: Vec<usize>,
+}
+
+/// One explicit transaction-data assignment.
+#[derive(Debug, Clone)]
+pub struct TransactionDataAssignment {
+    /// Index in the input `transaction_data` array.
+    pub index: usize,
+    /// Transaction data object.
+    pub transaction_data: TransactionData,
+    /// Credential Query id selected to authorize this transaction data entry.
+    pub credential_id: String,
+}
+
+/// One inner set: credentials presented together with bound transaction-data assignments.
+#[derive(Debug, Clone)]
+pub struct SelectionAlternative<C> {
+    /// Independent per-id choices available to the UI.
+    pub entries: Vec<SelectionEntry<C>>,
+    /// Transaction data bindings that must be kept together with entry selection.
+    pub transaction_data: Vec<TransactionDataAssignment>,
+}
+
+/// Full UI-oriented selection plan.
+#[derive(Debug, Clone)]
+pub struct SelectionPlan<C> {
+    /// Outer alternatives. Picking one yields one coherent inner set.
+    pub alternatives: Vec<SelectionAlternative<C>>,
+}
+
+/// Query planning error.
+#[derive(Debug, Clone, Error)]
+pub enum PlanError {
+    /// DCQL or transaction-data structure is invalid.
+    #[error("invalid dcql query: {0}")]
+    InvalidQuery(String),
+    /// Query is valid but cannot be satisfied with available credentials.
+    #[error(
+        "unsatisfied dcql query: no credential combination satisfies all credential and transaction_data constraints"
+    )]
+    Unsatisfied,
+}
+
+/// Build a UI-oriented selection plan from DCQL and optional transaction data.
+///
+/// The output is structured so that each `SelectionAlternative` can be rendered as one
+/// coherent "present + sign" choice. Inside one alternative, choosing a credential for one id
+/// does not invalidate choices for other ids.
+pub fn plan_selection<S>(
+    query: &DcqlQuery,
+    transaction_data: Option<&[TransactionData]>,
+    store: &S,
+    options: &PlanOptions,
+) -> Result<SelectionPlan<S::CredentialRef>, PlanError>
+where
+    S: CredentialStore,
+    S::CredentialRef: Clone,
+{
+    validate_query(query, transaction_data)?;
+
+    let mut matches_by_id = BTreeMap::new();
+    let mut query_by_id = BTreeMap::new();
+    for credential_query in &query.credentials {
+        let matches = match_query(store, credential_query)?;
+        let query_id = credential_query
+            .id()
+            .ok_or_else(|| {
+                PlanError::InvalidQuery(
+                    "internal invariant violated: dcql_query.credentials entry missing id after validation"
+                        .to_string(),
+                )
+            })?;
+        matches_by_id.insert(query_id.to_owned(), matches);
+        query_by_id.insert(query_id.to_owned(), credential_query);
+    }
+
+    let configs = build_configs(query, &matches_by_id, options)?;
+    if configs.is_empty() {
+        return Err(PlanError::Unsatisfied);
+    }
+
+    let required_ids = intersection(&configs);
+    let transaction_data = transaction_data.unwrap_or_default();
+
+    let mut alternatives = Vec::new();
+    for config in configs {
+        let assignments =
+            enumerate_transaction_assignments(store, &config, &matches_by_id, transaction_data);
+        for assignment in assignments {
+            let mut entries = Vec::new();
+            for id in &config {
+                let Some(base_query) = matches_by_id.get(id) else {
+                    continue;
+                };
+                let mut query_match = base_query.clone();
+                let domain = assignment
+                    .domains
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| query_match.credentials.clone());
+                if domain.is_empty() {
+                    continue;
+                }
+                let Some(query_definition) = query_by_id.get(id) else {
+                    continue;
+                };
+                let (selected_claims, filtered_domain) =
+                    match_claim_selection(store, query_definition, domain)?;
+                if filtered_domain.is_empty() {
+                    continue;
+                }
+                query_match.selected_claims = selected_claims;
+                query_match.credentials = filtered_domain;
+
+                let transaction_data_indices = assignment
+                    .transaction_credential_ids
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, selected_id)| (selected_id == id).then_some(idx))
+                    .collect();
+
+                entries.push(SelectionEntry {
+                    required: required_ids.contains(id),
+                    query: query_match,
+                    transaction_data_indices,
+                });
+            }
+
+            if entries.len() != config.len()
+                || entries
+                    .iter()
+                    .any(|entry| entry.query.credentials.is_empty())
+            {
+                continue;
+            }
+
+            let transaction_data_assignments = assignment
+                .transaction_credential_ids
+                .iter()
+                .enumerate()
+                .map(|(index, credential_id)| TransactionDataAssignment {
+                    index,
+                    transaction_data: transaction_data[index].clone(),
+                    credential_id: credential_id.clone(),
+                })
+                .collect();
+
+            alternatives.push(SelectionAlternative {
+                entries,
+                transaction_data: transaction_data_assignments,
+            });
+        }
+    }
+
+    if alternatives.is_empty() {
+        return Err(PlanError::Unsatisfied);
+    }
+
+    Ok(SelectionPlan { alternatives })
+}
+
+fn validate_query(
+    query: &DcqlQuery,
+    transaction_data: Option<&[TransactionData]>,
+) -> Result<(), PlanError> {
+    // Strict upfront validation avoids ambiguous planner behavior and keeps failures explicit.
+    if query.credentials.is_empty() {
+        return Err(PlanError::InvalidQuery(
+            "dcql_query.credentials must contain at least one credential query".to_string(),
+        ));
+    }
+
+    if query
+        .credential_sets
+        .as_ref()
+        .is_some_and(|credential_sets| credential_sets.is_empty())
+    {
+        return Err(PlanError::InvalidQuery(
+            "dcql_query.credential_sets must be non-empty when provided".to_string(),
+        ));
+    }
+
+    let mut credential_ids = BTreeSet::new();
+    let mut known_credentials_by_id = BTreeMap::new();
+
+    for credential in &query.credentials {
+        if credential.is_unknown() {
+            return Err(PlanError::InvalidQuery(
+                "unsupported credential format in dcql_query.credentials entry".to_string(),
+            ));
+        }
+
+        let query_id = credential.id().ok_or_else(|| {
+            PlanError::InvalidQuery(
+                "dcql_query.credentials[].id must be present and non-empty".to_string(),
+            )
+        })?;
+        if !is_valid_id(query_id) {
+            return Err(PlanError::InvalidQuery(format!(
+                "invalid credential id: {query_id}"
+            )));
+        }
+        if !credential_ids.insert(query_id.to_owned()) {
+            return Err(PlanError::InvalidQuery(format!(
+                "duplicate credential id: {query_id}"
+            )));
+        }
+
+        match credential.meta() {
+            Some(Meta::IsoMdoc(meta)) => {
+                if meta.doctype_value().is_empty() {
+                    return Err(PlanError::InvalidQuery(format!(
+                        "empty mso_mdoc doctype_value: {query_id}"
+                    )));
+                }
+            }
+            Some(Meta::SdJwtVc(meta)) => {
+                if meta.vct_values().is_empty() {
+                    return Err(PlanError::InvalidQuery(format!(
+                        "empty dc+sd-jwt vct_values: {query_id}"
+                    )));
+                }
+                if meta.vct_values().iter().any(|value| value.is_empty()) {
+                    return Err(PlanError::InvalidQuery(format!(
+                        "dc+sd-jwt vct_values contains empty value: {query_id}"
+                    )));
+                }
+            }
+            None => {
+                return Err(PlanError::InvalidQuery(
+                    "unsupported credential format in dcql_query.credentials entry".to_string(),
+                ));
+            }
+        }
+
+        if let Some(trusted_authorities) = credential.trusted_authorities() {
+            if trusted_authorities.is_empty() {
+                return Err(PlanError::InvalidQuery(format!(
+                    "trusted_authorities empty: {query_id}"
+                )));
+            }
+            for authority in trusted_authorities {
+                if authority.r#type.is_empty() {
+                    return Err(PlanError::InvalidQuery(format!(
+                        "trusted_authorities type empty: {query_id}"
+                    )));
+                }
+                if authority.values.is_empty() {
+                    return Err(PlanError::InvalidQuery(format!(
+                        "trusted_authorities values empty: {query_id}"
+                    )));
+                }
+            }
+        }
+
+        if credential.claims().is_some_and(|claims| claims.is_empty()) {
+            return Err(PlanError::InvalidQuery(format!("claims empty: {query_id}")));
+        }
+
+        if credential
+            .claim_sets()
+            .is_some_and(|claim_sets| claim_sets.is_empty())
+        {
+            return Err(PlanError::InvalidQuery(format!(
+                "claim_sets empty: {query_id}"
+            )));
+        }
+
+        if credential.claim_sets().is_some() && credential.claims().is_none() {
+            return Err(PlanError::InvalidQuery(format!(
+                "claim_sets without claims: {query_id}"
+            )));
+        }
+
+        let claim_sets_present = credential.claim_sets().is_some();
+        let mut claim_ids = BTreeSet::new();
+        if let Some(claims) = credential.claims() {
+            for claim in claims {
+                if claim.path.is_empty() {
+                    return Err(PlanError::InvalidQuery(format!(
+                        "empty claim path: {query_id}"
+                    )));
+                }
+                if claim
+                    .values
+                    .as_ref()
+                    .is_some_and(|values| values.is_empty())
+                {
+                    return Err(PlanError::InvalidQuery(format!(
+                        "empty claim values: {query_id}"
+                    )));
+                }
+                let Some(id) = claim.id() else {
+                    if claim_sets_present {
+                        return Err(PlanError::InvalidQuery(format!(
+                            "claims missing id: {query_id}"
+                        )));
+                    }
+                    continue;
+                };
+                if !is_valid_id(id) {
+                    return Err(PlanError::InvalidQuery(format!(
+                        "invalid claim id: {query_id}.{id}"
+                    )));
+                }
+                if !claim_ids.insert(id.to_owned()) {
+                    return Err(PlanError::InvalidQuery(format!(
+                        "duplicate claim id: {query_id}.{id}"
+                    )));
+                }
+            }
+        }
+
+        if let Some(claim_sets) = credential.claim_sets() {
+            for option in claim_sets {
+                if option.is_empty() {
+                    return Err(PlanError::InvalidQuery(format!(
+                        "empty claim_set option: {query_id}"
+                    )));
+                }
+                for claim_id in option {
+                    if !claim_ids.contains(claim_id) {
+                        return Err(PlanError::InvalidQuery(format!(
+                            "claim_set unknown claim id: {query_id}.{claim_id}"
+                        )));
+                    }
+                }
+            }
+        }
+
+        known_credentials_by_id.insert(query_id.to_owned(), credential);
+    }
+
+    if let Some(credential_sets) = &query.credential_sets {
+        for set in credential_sets {
+            if set.options.is_empty() {
+                return Err(PlanError::InvalidQuery(
+                    "dcql_query.credential_sets[].options must be non-empty".to_string(),
+                ));
+            }
+            for option in &set.options {
+                if option.is_empty() {
+                    return Err(PlanError::InvalidQuery(
+                        "dcql_query.credential_sets[].options[] must be non-empty".to_string(),
+                    ));
+                }
+                for credential_id in option {
+                    if !credential_ids.contains(credential_id) {
+                        return Err(PlanError::InvalidQuery(format!(
+                            "credential_sets unknown credential id: {credential_id}"
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(transaction_data) = transaction_data {
+        if transaction_data.is_empty() {
+            return Err(PlanError::InvalidQuery(
+                "transaction_data must be non-empty when provided".to_string(),
+            ));
+        }
+
+        for data in transaction_data {
+            if data.data_type.r#type.is_empty() {
+                return Err(PlanError::InvalidQuery(
+                    "transaction_data[].type must be non-empty".to_string(),
+                ));
+            }
+            if data.credential_ids.is_empty() {
+                return Err(PlanError::InvalidQuery(
+                    "transaction_data[].credential_ids must be non-empty".to_string(),
+                ));
+            }
+            for credential_id in &data.credential_ids {
+                let Some(credential) = known_credentials_by_id.get(credential_id) else {
+                    return Err(PlanError::InvalidQuery(format!(
+                        "transaction_data unknown credential_id: {credential_id}"
+                    )));
+                };
+                if credential.format() == Some("dc+sd-jwt")
+                    && credential.require_cryptographic_holder_binding() == Some(false)
+                {
+                    return Err(PlanError::InvalidQuery(format!(
+                        "transaction_data requires holder binding: {credential_id}"
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn is_valid_id(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+fn match_query<S>(
+    store: &S,
+    query: &CredentialQuery,
+) -> Result<QueryMatches<S::CredentialRef>, PlanError>
+where
+    S: CredentialStore,
+    S::CredentialRef: Clone,
+{
+    let Some(format) = query.format() else {
+        return Err(PlanError::InvalidQuery(
+            "unsupported credential format in dcql_query.credentials entry".to_string(),
+        ));
+    };
+    let Some(query_id) = query.id() else {
+        return Err(PlanError::InvalidQuery(
+            "dcql_query.credentials[].id must be present and non-empty".to_string(),
+        ));
+    };
+    let Some(meta) = query.meta() else {
+        return Err(PlanError::InvalidQuery(
+            "unsupported credential format in dcql_query.credentials entry".to_string(),
+        ));
+    };
+
+    let expected_format = CredentialFormat::from_query_format(format);
+    let mut candidates = Vec::new();
+    for cred in store.list_credentials(Some(format)) {
+        if store.format(&cred) != expected_format {
+            continue;
+        }
+        if !meta_matches(store, &cred, query) {
+            continue;
+        }
+        candidates.push(cred);
+    }
+
+    Ok(QueryMatches {
+        id: query_id.to_owned(),
+        format: expected_format,
+        meta,
+        multiple: query.multiple().unwrap_or(false),
+        require_holder_binding: query.require_cryptographic_holder_binding().unwrap_or(true),
+        trusted_authorities: query.trusted_authorities().map(|v| v.to_vec()),
+        selected_claims: Vec::new(),
+        credentials: candidates,
+    })
+}
+
+fn meta_matches<S>(store: &S, cred: &S::CredentialRef, query: &CredentialQuery) -> bool
+where
+    S: CredentialStore,
+{
+    let Some(format) = query.format() else {
+        return false;
+    };
+
+    if query
+        .trusted_authorities()
+        .is_some_and(|trusted_authorities| {
+            !store.matches_trusted_authorities(cred, trusted_authorities)
+        })
+    {
+        return false;
+    }
+
+    if query.require_cryptographic_holder_binding().unwrap_or(true)
+        && format == "dc+sd-jwt"
+        && !store.supports_holder_binding(cred)
+    {
+        return false;
+    }
+
+    match query.meta() {
+        Some(Meta::IsoMdoc(meta)) => store.has_doctype(cred, meta.doctype_value()),
+        Some(Meta::SdJwtVc(meta)) => meta.vct_values().iter().any(|v| store.has_vct(cred, v)),
+        None => false,
+    }
+}
+
+fn match_claim_selection<S>(
+    store: &S,
+    query: &CredentialQuery,
+    candidates: Vec<S::CredentialRef>,
+) -> Result<(Vec<ClaimsQuery>, Vec<S::CredentialRef>), PlanError>
+where
+    S: CredentialStore,
+    S::CredentialRef: Clone,
+{
+    let Some(claims) = query.claims() else {
+        return Ok((Vec::new(), candidates));
+    };
+    let claims = dedupe_claims_by_path(claims);
+
+    let is_mdoc = query.is_mdoc();
+    let Some(claim_sets) = query.claim_sets() else {
+        let filtered = filter_candidates(store, is_mdoc, &claims, &candidates);
+        return Ok((claims, filtered));
+    };
+
+    let Some(query_id) = query.id() else {
+        return Err(PlanError::InvalidQuery(
+            "internal invariant violated: dcql_query.credentials entry missing id during claim-set selection"
+                .to_string(),
+        ));
+    };
+    let claims_by_id = map_claims_by_id(query_id, &claims)?;
+
+    for option in claim_sets {
+        let mut selected = Vec::new();
+        for id in option {
+            let Some(claim) = claims_by_id.get(id) else {
+                selected.clear();
+                break;
+            };
+            selected.push((*claim).clone());
+        }
+        if selected.is_empty() {
+            continue;
+        }
+        let filtered = filter_candidates(store, is_mdoc, &selected, &candidates);
+        if !filtered.is_empty() {
+            return Ok((selected, filtered));
+        }
+    }
+
+    Ok((Vec::new(), Vec::new()))
+}
+
+fn map_claims_by_id<'a>(
+    query_id: &str,
+    claims: &'a [ClaimsQuery],
+) -> Result<BTreeMap<String, &'a ClaimsQuery>, PlanError> {
+    let mut map = BTreeMap::new();
+    for claim in claims {
+        let Some(id) = claim.id() else {
+            return Err(PlanError::InvalidQuery(format!(
+                "claims missing id: {query_id}"
+            )));
+        };
+        if map.insert(id.to_string(), claim).is_some() {
+            return Err(PlanError::InvalidQuery(format!(
+                "duplicate claim id: {query_id}.{id}"
+            )));
+        }
+    }
+    Ok(map)
+}
+
+fn filter_candidates<S>(
+    store: &S,
+    is_mdoc: bool,
+    claims: &[ClaimsQuery],
+    candidates: &[S::CredentialRef],
+) -> Vec<S::CredentialRef>
+where
+    S: CredentialStore,
+    S::CredentialRef: Clone,
+{
+    candidates
+        .iter()
+        .filter(|cred| {
+            claims
+                .iter()
+                .all(|claim| claim_matches(store, is_mdoc, cred, claim))
+        })
+        .cloned()
+        .collect()
+}
+
+fn dedupe_claims_by_path(claims: &[ClaimsQuery]) -> Vec<ClaimsQuery> {
+    let mut seen_paths = HashSet::new();
+    let mut out = Vec::new();
+    for claim in claims {
+        if seen_paths.insert(claim.path.clone()) {
+            out.push(claim.clone());
+        }
+    }
+    out
+}
+
+pub(crate) fn match_claims<S>(
+    store: &S,
+    cred: &S::CredentialRef,
+    query: &CredentialQuery,
+) -> Option<Vec<ClaimsQuery>>
+where
+    S: CredentialStore + ?Sized,
+{
+    let Some(claims) = query.claims() else {
+        return Some(Vec::new());
+    };
+    let claims = dedupe_claims_by_path(claims);
+
+    let is_mdoc = query.is_mdoc();
+    let Some(claim_sets) = query.claim_sets() else {
+        return claims
+            .iter()
+            .all(|claim| claim_matches(store, is_mdoc, cred, claim))
+            .then_some(claims);
+    };
+
+    let query_id = query.id()?;
+    let claims_by_id = map_claims_by_id(query_id, &claims).ok()?;
+
+    for option in claim_sets {
+        let mut selected = Vec::new();
+        for id in option {
+            let Some(claim) = claims_by_id.get(id) else {
+                selected.clear();
+                break;
+            };
+            selected.push((*claim).clone());
+        }
+        if selected.is_empty() {
+            continue;
+        }
+        if selected
+            .iter()
+            .all(|claim| claim_matches(store, is_mdoc, cred, claim))
+        {
+            return Some(selected);
+        }
+    }
+
+    None
+}
+
+fn claim_matches<S>(store: &S, is_mdoc: bool, cred: &S::CredentialRef, claim: &ClaimsQuery) -> bool
+where
+    S: CredentialStore + ?Sized,
+{
+    if claim.path.is_empty() {
+        return false;
+    }
+
+    if is_mdoc && !is_mdoc_path(&claim.path) {
+        return false;
+    }
+
+    if !store.has_claim_path(cred, &claim.path) {
+        return false;
+    }
+
+    let Some(values) = &claim.values else {
+        return true;
+    };
+
+    matches!(
+        store.match_claim_value(cred, &claim.path, values),
+        ValueMatch::Match
+    )
+}
+
+type Config = BTreeSet<String>;
+
+fn build_configs<C>(
+    query: &DcqlQuery,
+    matches_by_id: &BTreeMap<String, QueryMatches<C>>,
+    options: &PlanOptions,
+) -> Result<Vec<Config>, PlanError>
+where
+    C: Clone,
+{
+    let Some(credential_sets) = &query.credential_sets else {
+        let mut all = Config::new();
+        for credential_query in &query.credentials {
+            let query_id = credential_query
+                .id()
+                .ok_or_else(|| {
+                    PlanError::InvalidQuery(
+                        "internal invariant violated: dcql_query.credentials entry missing id while building default config"
+                            .to_string(),
+                    )
+                })?;
+            let Some(matches) = matches_by_id.get(query_id) else {
+                return Err(PlanError::Unsatisfied);
+            };
+            if matches.credentials.is_empty() {
+                return Err(PlanError::Unsatisfied);
+            }
+            all.insert(query_id.to_owned());
+        }
+        return Ok(vec![all]);
+    };
+
+    let (required, optional): (Vec<_>, Vec<_>) =
+        credential_sets.iter().partition(|set| set.required);
+
+    let required_options = required
+        .iter()
+        .map(|set| feasible_options(set, matches_by_id, options.credential_set_option_mode))
+        .collect::<Vec<_>>();
+
+    if required_options.iter().any(|opts| opts.is_empty()) {
+        return Err(PlanError::Unsatisfied);
+    }
+
+    let mut configs = if required_options.is_empty() {
+        vec![Config::new()]
+    } else {
+        cartesian_union(&required_options)
+    };
+
+    for set in optional {
+        let options_for_set =
+            feasible_options(set, matches_by_id, options.credential_set_option_mode);
+        if options_for_set.is_empty() {
+            continue;
+        }
+        configs = match options.optional_credential_sets_mode {
+            OptionalCredentialSetsMode::PreferPresent => {
+                expand_optional_prefer_present(configs, options_for_set)
+            }
+            OptionalCredentialSetsMode::PreferAbsent => {
+                expand_optional_prefer_absent(configs, options_for_set)
+            }
+            OptionalCredentialSetsMode::AlwaysPresentIfSatisfiable => {
+                include_optional_only(configs, options_for_set)
+            }
+        };
+    }
+
+    Ok(normalize_configs(configs))
+}
+
+fn feasible_options<C>(
+    set: &CredentialSetQuery,
+    matches_by_id: &BTreeMap<String, QueryMatches<C>>,
+    mode: CredentialSetOptionMode,
+) -> Vec<Config>
+where
+    C: Clone,
+{
+    let mut out = Vec::new();
+    for option in &set.options {
+        let feasible = option.iter().all(|id| {
+            matches_by_id
+                .get(id)
+                .map(|matches| !matches.credentials.is_empty())
+                .unwrap_or(false)
+        });
+        if !feasible {
+            continue;
+        }
+        out.push(option.iter().cloned().collect());
+        if matches!(mode, CredentialSetOptionMode::FirstSatisfiableOnly) {
+            break;
+        }
+    }
+    out
+}
+
+fn cartesian_union(options: &[Vec<Config>]) -> Vec<Config> {
+    let mut acc = vec![Config::new()];
+    for set_options in options {
+        let mut next = Vec::new();
+        for base in &acc {
+            for option in set_options {
+                let mut combined = base.clone();
+                combined.extend(option.iter().cloned());
+                next.push(combined);
+            }
+        }
+        acc = next;
+    }
+    acc
+}
+
+fn include_optional_only(configs: Vec<Config>, options: Vec<Config>) -> Vec<Config> {
+    let mut out = Vec::new();
+    for config in configs {
+        for option in &options {
+            let mut combined = config.clone();
+            combined.extend(option.iter().cloned());
+            out.push(combined);
+        }
+    }
+    out
+}
+
+fn expand_optional_prefer_present(configs: Vec<Config>, options: Vec<Config>) -> Vec<Config> {
+    let mut out = Vec::new();
+    for config in configs {
+        for option in &options {
+            let mut combined = config.clone();
+            combined.extend(option.iter().cloned());
+            if combined != config {
+                out.push(combined);
+            }
+        }
+        out.push(config);
+    }
+    out
+}
+
+fn expand_optional_prefer_absent(configs: Vec<Config>, options: Vec<Config>) -> Vec<Config> {
+    let mut out = Vec::new();
+    for config in configs {
+        out.push(config.clone());
+        for option in &options {
+            let mut combined = config.clone();
+            combined.extend(option.iter().cloned());
+            if combined != config {
+                out.push(combined);
+            }
+        }
+    }
+    out
+}
+
+fn normalize_configs(configs: Vec<Config>) -> Vec<Config> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for config in configs {
+        if seen.insert(config.clone()) {
+            out.push(config);
+        }
+    }
+    out
+}
+
+fn intersection(configs: &[Config]) -> BTreeSet<String> {
+    let mut iter = configs.iter();
+    let Some(first) = iter.next() else {
+        return BTreeSet::new();
+    };
+    let mut acc = first.clone();
+    for config in iter {
+        acc = acc.intersection(config).cloned().collect();
+    }
+    acc
+}
+
+#[derive(Debug, Clone)]
+struct TransactionAssignment<C> {
+    transaction_credential_ids: Vec<String>,
+    domains: BTreeMap<String, Vec<C>>,
+}
+
+fn enumerate_transaction_assignments<S>(
+    store: &S,
+    config: &Config,
+    matches_by_id: &BTreeMap<String, QueryMatches<S::CredentialRef>>,
+    transaction_data: &[TransactionData],
+) -> Vec<TransactionAssignment<S::CredentialRef>>
+where
+    S: CredentialStore,
+    S::CredentialRef: Clone,
+{
+    let mut domains = BTreeMap::new();
+    for id in config {
+        let Some(matches) = matches_by_id.get(id) else {
+            return Vec::new();
+        };
+        if matches.credentials.is_empty() {
+            return Vec::new();
+        }
+        domains.insert(id.clone(), matches.credentials.clone());
+    }
+
+    if transaction_data.is_empty() {
+        return vec![TransactionAssignment {
+            transaction_credential_ids: Vec::new(),
+            domains,
+        }];
+    }
+
+    let mut options_by_td: Vec<Vec<String>> = Vec::with_capacity(transaction_data.len());
+    for data in transaction_data {
+        let mut options = Vec::new();
+        for id in &data.credential_ids {
+            if !config.contains(id) {
+                continue;
+            }
+            let Some(domain) = domains.get(id) else {
+                continue;
+            };
+            if domain
+                .iter()
+                .any(|cred| store.can_sign_transaction_data(cred, data))
+            {
+                options.push(id.clone());
+            }
+        }
+        if options.is_empty() {
+            return Vec::new();
+        }
+        options_by_td.push(options);
+    }
+
+    let mut order: Vec<usize> = (0..transaction_data.len()).collect();
+    order.sort_by_key(|idx| options_by_td[*idx].len());
+
+    let mut transaction_credential_ids = vec![String::new(); transaction_data.len()];
+    let mut out = Vec::new();
+    backtrack_transaction_assignments(
+        store,
+        transaction_data,
+        &options_by_td,
+        &order,
+        0,
+        &mut domains,
+        &mut transaction_credential_ids,
+        &mut out,
+    );
+    out
+}
+
+fn backtrack_transaction_assignments<S>(
+    store: &S,
+    transaction_data: &[TransactionData],
+    options_by_td: &[Vec<String>],
+    order: &[usize],
+    depth: usize,
+    domains: &mut BTreeMap<String, Vec<S::CredentialRef>>,
+    transaction_credential_ids: &mut [String],
+    out: &mut Vec<TransactionAssignment<S::CredentialRef>>,
+) where
+    S: CredentialStore + ?Sized,
+    S::CredentialRef: Clone,
+{
+    if depth == order.len() {
+        out.push(TransactionAssignment {
+            transaction_credential_ids: transaction_credential_ids.to_vec(),
+            domains: domains.clone(),
+        });
+        return;
+    }
+
+    let td_idx = order[depth];
+    let td = &transaction_data[td_idx];
+
+    for id in &options_by_td[td_idx] {
+        let Some(current_domain) = domains.get(id).cloned() else {
+            continue;
+        };
+
+        let filtered_domain = current_domain
+            .iter()
+            .filter(|cred| store.can_sign_transaction_data(cred, td))
+            .cloned()
+            .collect::<Vec<_>>();
+        if filtered_domain.is_empty() {
+            continue;
+        }
+
+        domains.insert(id.clone(), filtered_domain);
+        transaction_credential_ids[td_idx] = id.clone();
+
+        backtrack_transaction_assignments(
+            store,
+            transaction_data,
+            options_by_td,
+            order,
+            depth + 1,
+            domains,
+            transaction_credential_ids,
+            out,
+        );
+
+        transaction_credential_ids[td_idx].clear();
+        domains.insert(id.clone(), current_domain);
+    }
+}
+
+/// Helper to build a claims path pointer from string components.
+pub fn pointer_from_strings(path: &[&str]) -> ClaimsPathPointer {
+    path.iter()
+        .map(|s| PathElement::String((*s).to_string()))
+        .collect()
+}

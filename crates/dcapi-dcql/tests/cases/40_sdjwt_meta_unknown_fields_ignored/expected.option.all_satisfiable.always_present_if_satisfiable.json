@@ -1,0 +1,9 @@
+{
+  "result": "plan",
+  "configs": [
+    ["pid"]
+  ],
+  "query_matches": {
+    "pid": { "credentials": ["sd1"], "selected_claim_ids": [] }
+  }
+}

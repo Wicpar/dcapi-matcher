@@ -1,0 +1,82 @@
+{
+  "result": "plan",
+  "configs": [
+    ["a", "b"]
+  ],
+  "query_matches": {
+    "a": {
+      "credentials": ["a_both", "a_t1", "a_none"],
+      "selected_claim_ids": []
+    },
+    "b": {
+      "credentials": ["b_both", "b_t2", "b_none"],
+      "selected_claim_ids": []
+    }
+  },
+  "alternatives": [
+    {
+      "transaction_data": [
+        { "index": 0, "credential_id": "a" },
+        { "index": 1, "credential_id": "a" }
+      ],
+      "entries": {
+        "a": {
+          "credentials": ["a_both"],
+          "transaction_data_indices": [0, 1]
+        },
+        "b": {
+          "credentials": ["b_both", "b_t2", "b_none"],
+          "transaction_data_indices": []
+        }
+      }
+    },
+    {
+      "transaction_data": [
+        { "index": 0, "credential_id": "a" },
+        { "index": 1, "credential_id": "b" }
+      ],
+      "entries": {
+        "a": {
+          "credentials": ["a_both", "a_t1"],
+          "transaction_data_indices": [0]
+        },
+        "b": {
+          "credentials": ["b_both", "b_t2"],
+          "transaction_data_indices": [1]
+        }
+      }
+    },
+    {
+      "transaction_data": [
+        { "index": 0, "credential_id": "b" },
+        { "index": 1, "credential_id": "a" }
+      ],
+      "entries": {
+        "a": {
+          "credentials": ["a_both"],
+          "transaction_data_indices": [1]
+        },
+        "b": {
+          "credentials": ["b_both"],
+          "transaction_data_indices": [0]
+        }
+      }
+    },
+    {
+      "transaction_data": [
+        { "index": 0, "credential_id": "b" },
+        { "index": 1, "credential_id": "b" }
+      ],
+      "entries": {
+        "a": {
+          "credentials": ["a_both", "a_t1", "a_none"],
+          "transaction_data_indices": []
+        },
+        "b": {
+          "credentials": ["b_both"],
+          "transaction_data_indices": [0, 1]
+        }
+      }
+    }
+  ]
+}

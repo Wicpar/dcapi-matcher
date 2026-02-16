@@ -1,0 +1,11 @@
+{
+  "result": "plan",
+  "configs": [
+    ["a"],
+    ["b"]
+  ],
+  "query_matches": {
+    "a": { "credentials": ["cred-a"], "selected_claim_ids": [] },
+    "b": { "credentials": ["cred-b"], "selected_claim_ids": [] }
+  }
+}

@@ -1,0 +1,26 @@
+[package]
+name = "dcapi-matcher"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+android-credman = { workspace = true }
+dcapi-dcql = { workspace = true }
+dcapi-matcher-macros = { workspace = true }
+dcapi-matcher-tracing = { path = "../dcapi-matcher-tracing" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { workspace = true, default-features = false, features = ["alloc", "preserve_order"] }
+ciborium = { version = "0.2", default-features = false }
+ciborium-io = "0.2"
+base64 = "0.22"
+thiserror = "2.0"
+jsonschema = { version = "0.42.0", default-features = false }
+tracing = { version = "0.1", default-features = false }
+tracing-core = { version = "0.1", default-features = false }
+
+[features]
+std = []
+test-shim = ["android-credman/test-shim", "std"]
+
+[dev-dependencies]
+android-credman = { workspace = true, features = ["test-shim"] }

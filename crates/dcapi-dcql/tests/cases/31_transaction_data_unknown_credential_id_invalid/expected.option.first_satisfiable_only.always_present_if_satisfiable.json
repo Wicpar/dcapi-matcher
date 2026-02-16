@@ -1,0 +1,5 @@
+{
+  "result": "error",
+  "error": "InvalidQuery",
+  "message": "transaction_data unknown credential_id: missing"
+}

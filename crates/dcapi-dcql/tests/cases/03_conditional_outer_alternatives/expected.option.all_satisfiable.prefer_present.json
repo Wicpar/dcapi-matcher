@@ -1,0 +1,15 @@
+{
+  "result": "plan",
+  "min_outer_alternatives": 2,
+  "configs": [
+    ["a", "b"],
+    ["a", "c"],
+    ["b", "d"]
+  ],
+  "query_matches": {
+    "a": { "credentials": ["sd_a"], "selected_claim_ids": [] },
+    "b": { "credentials": ["sd_b"], "selected_claim_ids": [] },
+    "c": { "credentials": ["sd_c"], "selected_claim_ids": [] },
+    "d": { "credentials": ["sd_d"], "selected_claim_ids": [] }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "credentials": [
+    {
+      "id": "known",
+      "format": "dc+sd-jwt",
+      "meta": { "vct_values": ["vct:known"] }
+    },
+    {
+      "id": "unknown",
+      "format": "jwt_vc_json",
+      "meta": { "foo": "bar" }
+    }
+  ]
+}
