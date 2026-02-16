@@ -4,10 +4,9 @@ use crate::error::{
     Ts12MetadataError,
 };
 use crate::models::{
-    CredentialOffer, DcApiRequest, InputDescriptor, OpenId4VciRequest, OpenId4VpRequest,
-    PROTOCOL_OPENID4VCI, PROTOCOL_OPENID4VP, PROTOCOL_OPENID4VP_V1_MULTISIGNED,
-    PROTOCOL_OPENID4VP_V1_SIGNED, PROTOCOL_OPENID4VP_V1_UNSIGNED, RequestData,
-    TransactionDataInput,
+    CredentialOffer, DcApiRequest, OpenId4VciRequest, OpenId4VpRequest, PROTOCOL_OPENID4VCI,
+    PROTOCOL_OPENID4VP, PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
+    PROTOCOL_OPENID4VP_V1_UNSIGNED, RequestData, TransactionDataInput,
 };
 use crate::response::{
     ResolvedCredentialEntry, ResolvedCredentialSet, ResolvedCredentialSlot, ResolvedField,
@@ -30,18 +29,10 @@ use core::cell::RefCell;
 use core::hash::Hash;
 
 /// Matcher framework options.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MatcherOptions {
     /// DCQL planner behavior.
     pub dcql: PlanOptions,
-}
-
-impl Default for MatcherOptions {
-    fn default() -> Self {
-        Self {
-            dcql: PlanOptions::default(),
-        }
-    }
 }
 
 struct ValidatedStore<'a, S: MatcherStore> {
@@ -255,19 +246,6 @@ where
         self.inner.ts12_transaction_metadata(cred, transaction_data)
     }
 
-    fn format_ts12_value(
-        &self,
-        cred: &Self::CredentialRef,
-        path: &ClaimsPathPointer,
-        value: &Value,
-        locale: &str,
-    ) -> Option<String> {
-        if !self.is_valid(cred) {
-            return None;
-        }
-        self.inner.format_ts12_value(cred, path, value, locale)
-    }
-
     fn ts12_payment_summary(
         &self,
         cred: &Self::CredentialRef,
@@ -283,29 +261,20 @@ where
             .ts12_payment_summary(cred, transaction_data, payload, metadata, locale)
     }
 
-    fn matches_presentation_definition(
+    fn format_ts12_value(
         &self,
         cred: &Self::CredentialRef,
-        descriptor: &InputDescriptor,
-    ) -> bool {
-        self.is_valid(cred) && self.inner.matches_presentation_definition(cred, descriptor)
+        path: &ClaimsPathPointer,
+        value: &Value,
+        locale: &str,
+    ) -> Option<String> {
+        if !self.is_valid(cred) {
+            return None;
+        }
+        self.inner.format_ts12_value(cred, path, value, locale)
     }
 
-    fn matches_openid4vci_configuration(
-        &self,
-        cred: &Self::CredentialRef,
-        credential_offer: &CredentialOffer,
-        credential_configuration_id: &str,
-        credential_configuration: Option<&Value>,
-    ) -> bool {
-        self.is_valid(cred)
-            && self.inner.matches_openid4vci_configuration(
-                cred,
-                credential_offer,
-                credential_configuration_id,
-                credential_configuration,
-            )
-    }
+
 }
 
 /// Parses and matches a DC API request with the given credential store.
@@ -385,8 +354,7 @@ where
                 if !vci_config.enabled {
                     continue;
                 }
-                let result =
-                    match_openid4vci_request(request_index, &item.data, &validated_store, &vci_config, options)?;
+                let result = match_openid4vci_request(request_index, &item.data, &vci_config)?;
                 response.results.extend(result.results);
             }
             _ => {}
@@ -418,7 +386,28 @@ where
     let value = data
         .to_value()
         .map_err(|err| MatcherError::InvalidRequestData(RequestDataError::Json { source: err }))?;
-    let request: OpenId4VpRequest = serde_json::from_value(value).map_err(|err| {
+    let response_mode = value
+        .as_object()
+        .and_then(|obj| obj.get("response_mode"))
+        .and_then(Value::as_str);
+    if response_mode == Some("dc_api.jwt") && !config.allow_response_mode_jwt {
+        return Ok(ResolvedMatcherResponse::new());
+    }
+
+    let has_request_object = value
+        .as_object()
+        .and_then(|obj| obj.get("request"))
+        .is_some();
+    if has_request_object && !config.allow_signed_requests {
+        return Ok(ResolvedMatcherResponse::new());
+    }
+
+    let scope_present = value
+        .as_object()
+        .and_then(|obj| obj.get("scope"))
+        .is_some();
+
+    let request: OpenId4VpRequest = serde_json::from_value(value.clone()).map_err(|err| {
         if protocol == PROTOCOL_OPENID4VP_V1_SIGNED || protocol == PROTOCOL_OPENID4VP_V1_MULTISIGNED
         {
             MatcherError::InvalidOpenId4Vp(OpenId4VpError::SignedPayloadNotSupported {
@@ -432,89 +421,81 @@ where
 
     let mut response = ResolvedMatcherResponse::new();
 
-    if let Some(dcql_query) = &request.dcql_query {
-        if !config.allow_dcql {
-            return Ok(response);
-        }
-        if !config.allow_transaction_data && request.transaction_data.is_some() {
-            return Ok(response);
-        }
-        let transaction_data = decode_transaction_data(request.transaction_data.as_deref());
-        let transaction_data = if let Some(data) = transaction_data {
-            let filtered = filter_transaction_data_for_query(dcql_query, data.as_slice());
-            if filtered.is_empty() {
-                tracing::warn!("transaction_data filtered out; no valid entries remain");
+    if has_request_object {
+        return Err(MatcherError::InvalidOpenId4Vp(
+            OpenId4VpError::RequestObjectUnsupported {
+                protocol: protocol.to_string(),
+            },
+        ));
+    }
+
+    let dcql_query = match request.dcql_query.as_ref() {
+        Some(dcql_query) => {
+            if !config.allow_dcql {
                 return Ok(response);
             }
-            Some(filtered)
-        } else {
-            None
-        };
-        let plan = match dcapi_dcql::plan_selection(
-            dcql_query,
-            transaction_data.as_deref(),
-            store,
-            &options.dcql,
-        ) {
-            Ok(plan) => plan,
-            Err(dcapi_dcql::PlanError::Unsatisfied) => {
-                tracing::warn!("dcql query unsatisfied; no matching credentials");
-                return Ok(response);
-            }
-            Err(err) => return Err(MatcherError::Dcql(err)),
-        };
-        for (alternative_index, alternative) in plan.alternatives.iter().enumerate() {
-            let set = resolved_set_from_dcql_alternative(
-                store,
-                request_index,
-                alternative_index,
-                alternative,
-                transaction_data.as_deref().unwrap_or_default(),
-                protocol,
-                options,
-            )?;
-            response = response.add_set(set);
+            dcql_query
         }
+        None => {
+            if scope_present {
+                if !config.allow_dcql_scope {
+                    return Ok(response);
+                }
+                return Err(MatcherError::InvalidOpenId4Vp(
+                    OpenId4VpError::DcqlScopeUnsupported,
+                ));
+            }
+            return Ok(response);
+        }
+    };
+
+    if !config.allow_transaction_data && request.transaction_data.is_some() {
         return Ok(response);
     }
-
-    if config.allow_presentation_definition
-        && let Some(presentation_definition) = &request.presentation_definition
-    {
-        let mut set = ResolvedCredentialSet::new(format!(
-            "{protocol}:{request_index}:presentation_definition"
-        ));
-        for descriptor in &presentation_definition.input_descriptors {
-            let slot = resolved_slot_from_presentation_descriptor(
-                store,
-                request_index,
-                descriptor,
-                protocol,
-                options,
-            )?;
-            if !slot.alternatives.is_empty() {
-                set = set.add_slot(slot);
-            }
+    let transaction_data = decode_transaction_data(request.transaction_data.as_deref());
+    let transaction_data = if let Some(data) = transaction_data {
+        let filtered = filter_transaction_data_for_query(dcql_query, data.as_slice());
+        if filtered.is_empty() {
+            tracing::warn!("transaction_data filtered out; no valid entries remain");
+            return Ok(response);
         }
-        if !set.slots.is_empty() {
-            response = response.add_set(set);
+        Some(filtered)
+    } else {
+        None
+    };
+    let plan = match dcapi_dcql::plan_selection(
+        dcql_query,
+        transaction_data.as_deref(),
+        store,
+        &options.dcql,
+    ) {
+        Ok(plan) => plan,
+        Err(dcapi_dcql::PlanError::Unsatisfied) => {
+            tracing::warn!("dcql query unsatisfied; no matching credentials");
+            return Ok(response);
         }
+        Err(err) => return Err(MatcherError::Dcql(err)),
+    };
+    for (alternative_index, alternative) in plan.alternatives.iter().enumerate() {
+        let set = resolved_set_from_dcql_alternative(
+            store,
+            request_index,
+            alternative_index,
+            alternative,
+            transaction_data.as_deref().unwrap_or_default(),
+            protocol,
+            options,
+        )?;
+        response = response.add_set(set);
     }
-
     Ok(response)
 }
 
-fn match_openid4vci_request<S>(
+fn match_openid4vci_request(
     request_index: usize,
     data: &RequestData,
-    store: &S,
     config: &OpenId4VciConfig,
-    options: &MatcherOptions,
-) -> Result<ResolvedMatcherResponse, MatcherError>
-where
-    S: MatcherStore,
-    S::CredentialRef: Clone + Eq + Hash,
-{
+) -> Result<ResolvedMatcherResponse, MatcherError> {
     if !config.allow_credential_offer {
         return Ok(ResolvedMatcherResponse::new());
     }
@@ -539,36 +520,23 @@ where
         return Ok(ResolvedMatcherResponse::new());
     };
     validate_credential_offer(credential_offer)?;
+    if !credential_offer_has_supported_grant(credential_offer, config) {
+        return Ok(ResolvedMatcherResponse::new());
+    }
 
     let mut set =
         ResolvedCredentialSet::new(format!("{PROTOCOL_OPENID4VCI}:{request_index}:offer"));
     for configuration_id in &credential_offer.credential_configuration_ids {
-        let mut slot = ResolvedCredentialSlot::new(Some(configuration_id.clone()), true);
         let configuration = request.credential_configuration(configuration_id);
-        for cred in store.list_credentials(None) {
-            if !store.supports_protocol(&cred, PROTOCOL_OPENID4VCI) {
-                continue;
-            }
-            if !store.matches_openid4vci_configuration(
-                &cred,
-                credential_offer,
-                configuration_id.as_str(),
-                configuration,
-            ) {
-                continue;
-            }
-
-            let context = CredentialSelectionContext::OpenId4VciOffer {
-                request_index,
-                credential_issuer: credential_offer.credential_issuer.as_str(),
-                credential_configuration_id: configuration_id.as_str(),
-                credential_configuration: configuration,
-            };
-            slot = slot.add_alternative(build_resolved_entry(store, &cred, &context, options)?);
-        }
-        if !slot.alternatives.is_empty() {
-            set = set.add_slot(slot);
-        }
+        let entry = build_vci_entry(
+            request_index,
+            credential_offer,
+            configuration_id.as_str(),
+            configuration,
+        )?;
+        let slot = ResolvedCredentialSlot::new(Some(configuration_id.clone()), true)
+            .add_alternative(entry);
+        set = set.add_slot(slot);
     }
 
     if set.slots.is_empty() {
@@ -593,7 +561,7 @@ fn validate_credential_offer(credential_offer: &CredentialOffer) -> Result<(), M
                 OpenId4VciError::CredentialConfigurationIdEmpty,
             ));
         }
-        if seen.iter().any(|existing| *existing == id.as_str()) {
+        if seen.contains(&id.as_str()) {
             return Err(MatcherError::InvalidOpenId4Vci(
                 OpenId4VciError::CredentialConfigurationIdsNotUnique,
             ));
@@ -601,6 +569,104 @@ fn validate_credential_offer(credential_offer: &CredentialOffer) -> Result<(), M
         seen.push(id.as_str());
     }
     Ok(())
+}
+
+fn credential_offer_has_supported_grant(
+    credential_offer: &CredentialOffer,
+    config: &OpenId4VciConfig,
+) -> bool {
+    let allow_authorization_code = config.allow_authorization_code
+        && (config.allow_authorization_details || config.allow_scope);
+    let allow_pre_authorized_code = config.allow_pre_authorized_code;
+
+    if credential_offer.grants.is_empty() {
+        return allow_authorization_code || allow_pre_authorized_code;
+    }
+
+    for (grant_type, grant_config) in &credential_offer.grants {
+        match grant_type.as_str() {
+            "authorization_code" => {
+                if allow_authorization_code {
+                    return true;
+                }
+            }
+            "urn:ietf:params:oauth:grant-type:pre-authorized_code" => {
+                if !allow_pre_authorized_code {
+                    continue;
+                }
+                if grant_requires_tx_code(grant_config) && !config.allow_tx_code {
+                    continue;
+                }
+                return true;
+            }
+            _ => {}
+        }
+    }
+
+    false
+}
+
+fn grant_requires_tx_code(grant_config: &Value) -> bool {
+    let Some(obj) = grant_config.as_object() else {
+        return false;
+    };
+    obj.contains_key("tx_code")
+}
+
+fn build_vci_entry(
+    request_index: usize,
+    credential_offer: &CredentialOffer,
+    configuration_id: &str,
+    configuration: Option<&Value>,
+) -> Result<ResolvedCredentialEntry, MatcherError> {
+    let (title, subtitle) = vci_display_from_configuration(configuration);
+    let mut entry = ResolvedCredentialEntry::new(
+        configuration_id.to_string(),
+        title.unwrap_or_else(|| configuration_id.to_string()),
+    );
+    entry.subtitle = subtitle;
+
+    let context = CredentialSelectionContext::OpenId4VciOffer {
+        request_index,
+        credential_issuer: credential_offer.credential_issuer.as_str(),
+        credential_configuration_id: configuration_id,
+        credential_configuration: configuration,
+    };
+    let metadata = merged_metadata(None, None, &context, None);
+    entry.metadata_json = metadata
+        .map(|value| serde_json::to_string(&value))
+        .transpose()
+        .map_err(|err| MatcherError::MetadataSerialization { source: err })?;
+
+    Ok(entry)
+}
+
+fn vci_display_from_configuration(
+    configuration: Option<&Value>,
+) -> (Option<String>, Option<String>) {
+    let Some(configuration) = configuration else {
+        return (None, None);
+    };
+    let display = configuration
+        .get("credential_metadata")
+        .and_then(|metadata| metadata.get("display"))
+        .and_then(Value::as_array)
+        .or_else(|| configuration.get("display").and_then(Value::as_array));
+    let Some(entry) = display.and_then(|entries| entries.first()) else {
+        return (None, None);
+    };
+    let Some(obj) = entry.as_object() else {
+        return (None, None);
+    };
+    let title = obj
+        .get("name")
+        .and_then(Value::as_str)
+        .map(|value| value.to_string());
+    let subtitle = obj
+        .get("description")
+        .and_then(Value::as_str)
+        .map(|value| value.to_string());
+    (title, subtitle)
 }
 
 fn resolved_set_from_dcql_alternative<S>(
@@ -630,6 +696,7 @@ where
                 request_index,
                 alternative_index,
                 query_id: entry.query.id.as_str(),
+                selected_claims: entry.query.selected_claims.as_slice(),
                 transaction_data,
                 transaction_data_indices: entry.transaction_data_indices.as_slice(),
             };
@@ -643,33 +710,6 @@ where
     Ok(set)
 }
 
-fn resolved_slot_from_presentation_descriptor<S>(
-    store: &S,
-    request_index: usize,
-    descriptor: &InputDescriptor,
-    protocol: &str,
-    options: &MatcherOptions,
-) -> Result<ResolvedCredentialSlot, MatcherError>
-where
-    S: MatcherStore,
-    S::CredentialRef: Clone + Eq + Hash,
-{
-    let mut slot = ResolvedCredentialSlot::new(Some(descriptor.id.clone()), true);
-    for cred in store.list_credentials(None) {
-        if !store.supports_protocol(&cred, protocol) {
-            continue;
-        }
-        if !store.matches_presentation_definition(&cred, descriptor) {
-            continue;
-        }
-        let context = CredentialSelectionContext::OpenId4VpPresentationDefinition {
-            request_index,
-            input_descriptor_id: descriptor.id.as_str(),
-        };
-        slot = slot.add_alternative(build_resolved_entry(store, &cred, &context, options)?);
-    }
-    Ok(slot)
-}
 
 fn build_resolved_entry<S>(
     store: &S,
@@ -680,7 +720,7 @@ fn build_resolved_entry<S>(
 where
     S: MatcherStore + ?Sized,
 {
-    let descriptor = store.describe_credential(cred);
+    let descriptor = store.describe_credential_for_context(cred, context);
     let credential_id = descriptor.credential_id.clone();
     let mut entry = ResolvedCredentialEntry::new(descriptor.credential_id, descriptor.title);
     entry.icon = descriptor.icon;
@@ -804,6 +844,7 @@ fn context_metadata_value(context: &CredentialSelectionContext<'_>) -> Value {
             query_id,
             transaction_data,
             transaction_data_indices,
+            ..
         } => {
             obj.insert("source".to_string(), Value::String("dcql".to_string()));
             obj.insert(
@@ -838,23 +879,6 @@ fn context_metadata_value(context: &CredentialSelectionContext<'_>) -> Value {
             obj.insert(
                 "transaction_data".to_string(),
                 Value::Array(selected_transaction_data),
-            );
-        }
-        CredentialSelectionContext::OpenId4VpPresentationDefinition {
-            request_index,
-            input_descriptor_id,
-        } => {
-            obj.insert(
-                "source".to_string(),
-                Value::String("presentation_definition".to_string()),
-            );
-            obj.insert(
-                "request_index".to_string(),
-                Value::from(*request_index as u64),
-            );
-            obj.insert(
-                "input_descriptor_id".to_string(),
-                Value::String((*input_descriptor_id).to_string()),
             );
         }
         CredentialSelectionContext::OpenId4VciOffer {
@@ -893,14 +917,12 @@ fn context_metadata_value(context: &CredentialSelectionContext<'_>) -> Value {
 fn decode_transaction_data(
     transaction_data: Option<&[TransactionDataInput]>,
 ) -> Option<Vec<TransactionData>> {
-    let Some(transaction_data) = transaction_data else {
-        return None;
-    };
+    let transaction_data = transaction_data?;
 
     let mut out = Vec::with_capacity(transaction_data.len());
     for (index, item) in transaction_data.iter().enumerate() {
         let parsed = match item {
-            TransactionDataInput::Decoded(data) => data.clone(),
+            TransactionDataInput::Decoded(data) => data.as_ref().clone(),
             TransactionDataInput::Encoded(encoded) => {
                 let bytes = match decode_base64url(encoded) {
                     Ok(bytes) => bytes,
@@ -1005,10 +1027,10 @@ fn pad_base64url(input: &str) -> String {
 }
 
 fn decode_openid4vci_request(value: &Value) -> Result<OpenId4VciRequest, MatcherError> {
-    if let Ok(request) = serde_json::from_value::<OpenId4VciRequest>(value.clone()) {
-        if request.credential_offer.is_some() || request.credential_offer_uri.is_some() {
-            return Ok(request);
-        }
+    if let Ok(request) = serde_json::from_value::<OpenId4VciRequest>(value.clone())
+        && (request.credential_offer.is_some() || request.credential_offer_uri.is_some())
+    {
+        return Ok(request);
     }
 
     if let Ok(offer) = serde_json::from_value::<CredentialOffer>(value.clone()) {

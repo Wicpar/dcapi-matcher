@@ -1,5 +1,9 @@
-#![allow(clippy::too_many_arguments)]
-
+use crate::host::{
+    EntrySetRequest, EntryToSetRequest, FieldForStringIdEntryRequest, FieldToEntrySetRequest,
+    InlineIssuanceEntryRequest, PackageInfoRequest, PaymentEntryRequest,
+    PaymentEntryToSetRequest, PaymentEntryToSetV2Request, StringIdEntryRequest,
+    VerificationEntryUpdateRequest,
+};
 use android_credman_sys::{credman, credman_v2, credman_v4};
 use std::ffi::{CString, c_char};
 use std::ptr;
@@ -22,20 +26,13 @@ fn to_bytes_ptr_len(b: Option<&[u8]>) -> (*const c_char, usize) {
     }
 }
 
-pub fn add_string_id_entry(
-    cred_id: &str,
-    icon: Option<&[u8]>,
-    title: &str,
-    subtitle: Option<&str>,
-    disclaimer: Option<&str>,
-    warning: Option<&str>,
-) {
-    let (_c_cred_id, p_cred_id) = to_c_str(Some(cred_id));
-    let (p_icon, len_icon) = to_bytes_ptr_len(icon);
-    let (_c_title, p_title) = to_c_str(Some(title));
-    let (_c_subtitle, p_subtitle) = to_c_str(subtitle);
-    let (_c_disclaimer, p_disclaimer) = to_c_str(disclaimer);
-    let (_c_warning, p_warning) = to_c_str(warning);
+pub fn add_string_id_entry(req: &StringIdEntryRequest<'_>) {
+    let (_c_cred_id, p_cred_id) = to_c_str(Some(req.cred_id));
+    let (p_icon, len_icon) = to_bytes_ptr_len(req.icon);
+    let (_c_title, p_title) = to_c_str(Some(req.title));
+    let (_c_subtitle, p_subtitle) = to_c_str(req.subtitle);
+    let (_c_disclaimer, p_disclaimer) = to_c_str(req.disclaimer);
+    let (_c_warning, p_warning) = to_c_str(req.warning);
 
     unsafe {
         credman::AddStringIdEntry(
@@ -50,38 +47,25 @@ pub fn add_string_id_entry(
     }
 }
 
-pub fn add_field_for_string_id_entry_opt(
-    cred_id: &str,
-    field_display_name: &str,
-    field_display_value: Option<&str>,
-) {
-    let (_c_cred_id, p_cred_id) = to_c_str(Some(cred_id));
-    let (_c_name, p_name) = to_c_str(Some(field_display_name));
-    let (_c_val, p_val) = to_c_str(field_display_value);
+pub fn add_field_for_string_id_entry_opt(req: &FieldForStringIdEntryRequest<'_>) {
+    let (_c_cred_id, p_cred_id) = to_c_str(Some(req.cred_id));
+    let (_c_name, p_name) = to_c_str(Some(req.field_display_name));
+    let (_c_val, p_val) = to_c_str(req.field_display_value);
 
     unsafe {
         credman::AddFieldForStringIdEntry(p_cred_id, p_name, p_val);
     }
 }
 
-pub fn add_payment_entry(
-    cred_id: &str,
-    merchant_name: &str,
-    payment_method_name: Option<&str>,
-    payment_method_subtitle: Option<&str>,
-    payment_method_icon: Option<&[u8]>,
-    transaction_amount: &str,
-    bank_icon: Option<&[u8]>,
-    payment_provider_icon: Option<&[u8]>,
-) {
-    let (_c_cred_id, p_cred_id) = to_c_str(Some(cred_id));
-    let (_c_merchant, p_merchant) = to_c_str(Some(merchant_name));
-    let (_c_pm_name, p_pm_name) = to_c_str(payment_method_name);
-    let (_c_pm_sub, p_pm_sub) = to_c_str(payment_method_subtitle);
-    let (p_pm_icon, len_pm_icon) = to_bytes_ptr_len(payment_method_icon);
-    let (_c_amount, p_amount) = to_c_str(Some(transaction_amount));
-    let (p_bank_icon, len_bank_icon) = to_bytes_ptr_len(bank_icon);
-    let (p_pp_icon, len_pp_icon) = to_bytes_ptr_len(payment_provider_icon);
+pub fn add_payment_entry(req: &PaymentEntryRequest<'_>) {
+    let (_c_cred_id, p_cred_id) = to_c_str(Some(req.cred_id));
+    let (_c_merchant, p_merchant) = to_c_str(Some(req.merchant_name));
+    let (_c_pm_name, p_pm_name) = to_c_str(req.payment_method_name);
+    let (_c_pm_sub, p_pm_sub) = to_c_str(req.payment_method_subtitle);
+    let (p_pm_icon, len_pm_icon) = to_bytes_ptr_len(req.payment_method_icon);
+    let (_c_amount, p_amount) = to_c_str(Some(req.transaction_amount));
+    let (p_bank_icon, len_bank_icon) = to_bytes_ptr_len(req.bank_icon);
+    let (p_pp_icon, len_pp_icon) = to_bytes_ptr_len(req.payment_provider_icon);
 
     unsafe {
         credman::AddPaymentEntry(
@@ -100,32 +84,22 @@ pub fn add_payment_entry(
     }
 }
 
-pub fn add_inline_issuance_entry(
-    cred_id: &str,
-    icon: Option<&[u8]>,
-    title: &str,
-    subtitle: Option<&str>,
-) {
-    let (_c_cred_id, p_cred_id) = to_c_str(Some(cred_id));
-    let (p_icon, len_icon) = to_bytes_ptr_len(icon);
-    let (_c_title, p_title) = to_c_str(Some(title));
-    let (_c_subtitle, p_subtitle) = to_c_str(subtitle);
+pub fn add_inline_issuance_entry(req: &InlineIssuanceEntryRequest<'_>) {
+    let (_c_cred_id, p_cred_id) = to_c_str(Some(req.cred_id));
+    let (p_icon, len_icon) = to_bytes_ptr_len(req.icon);
+    let (_c_title, p_title) = to_c_str(Some(req.title));
+    let (_c_subtitle, p_subtitle) = to_c_str(req.subtitle);
 
     unsafe {
         credman::AddInlineIssuanceEntry(p_cred_id, p_icon, len_icon, p_title, p_subtitle);
     }
 }
 
-pub fn set_additional_disclaimer_and_url(
-    cred_id: &str,
-    secondary_disclaimer: Option<&str>,
-    url_display_text: Option<&str>,
-    url_value: Option<&str>,
-) {
-    let (_c_cred_id, p_cred_id) = to_c_str(Some(cred_id));
-    let (_c_disc, p_disc) = to_c_str(secondary_disclaimer);
-    let (_c_url_txt, p_url_txt) = to_c_str(url_display_text);
-    let (_c_url_val, p_url_val) = to_c_str(url_value);
+pub fn set_additional_disclaimer_and_url(req: &VerificationEntryUpdateRequest<'_>) {
+    let (_c_cred_id, p_cred_id) = to_c_str(Some(req.cred_id));
+    let (_c_disc, p_disc) = to_c_str(req.secondary_disclaimer);
+    let (_c_url_txt, p_url_txt) = to_c_str(req.url_display_text);
+    let (_c_url_val, p_url_val) = to_c_str(req.url_value);
 
     unsafe {
         credman::SetAdditionalDisclaimerAndUrlForVerificationEntry(
@@ -136,32 +110,22 @@ pub fn set_additional_disclaimer_and_url(
 
 // --- V2 ---
 
-pub fn add_entry_set(set_id: &str, set_length: i32) {
-    let (_c_set_id, p_set_id) = to_c_str(Some(set_id));
+pub fn add_entry_set(req: &EntrySetRequest<'_>) {
+    let (_c_set_id, p_set_id) = to_c_str(Some(req.set_id));
     unsafe {
-        credman_v2::AddEntrySet(p_set_id, set_length);
+        credman_v2::AddEntrySet(p_set_id, req.set_length);
     }
 }
 
-pub fn add_entry_to_set(
-    cred_id: &str,
-    icon: Option<&[u8]>,
-    title: &str,
-    subtitle: Option<&str>,
-    disclaimer: Option<&str>,
-    warning: Option<&str>,
-    metadata: Option<&str>,
-    set_id: &str,
-    set_index: i32,
-) {
-    let (_c_cred_id, p_cred_id) = to_c_str(Some(cred_id));
-    let (p_icon, len_icon) = to_bytes_ptr_len(icon);
-    let (_c_title, p_title) = to_c_str(Some(title));
-    let (_c_subtitle, p_subtitle) = to_c_str(subtitle);
-    let (_c_disclaimer, p_disclaimer) = to_c_str(disclaimer);
-    let (_c_warning, p_warning) = to_c_str(warning);
-    let (_c_metadata, p_metadata) = to_c_str(metadata);
-    let (_c_set_id, p_set_id) = to_c_str(Some(set_id));
+pub fn add_entry_to_set(req: &EntryToSetRequest<'_>) {
+    let (_c_cred_id, p_cred_id) = to_c_str(Some(req.cred_id));
+    let (p_icon, len_icon) = to_bytes_ptr_len(req.icon);
+    let (_c_title, p_title) = to_c_str(Some(req.title));
+    let (_c_subtitle, p_subtitle) = to_c_str(req.subtitle);
+    let (_c_disclaimer, p_disclaimer) = to_c_str(req.disclaimer);
+    let (_c_warning, p_warning) = to_c_str(req.warning);
+    let (_c_metadata, p_metadata) = to_c_str(req.metadata);
+    let (_c_set_id, p_set_id) = to_c_str(Some(req.set_id));
 
     unsafe {
         credman_v2::AddEntryToSet(
@@ -174,51 +138,33 @@ pub fn add_entry_to_set(
             p_warning,
             p_metadata,
             p_set_id,
-            set_index,
+            req.set_index,
         );
     }
 }
 
-pub fn add_field_to_entry_set_opt(
-    cred_id: &str,
-    field_display_name: &str,
-    field_display_value: Option<&str>,
-    set_id: &str,
-    set_index: i32,
-) {
-    let (_c_cred_id, p_cred_id) = to_c_str(Some(cred_id));
-    let (_c_name, p_name) = to_c_str(Some(field_display_name));
-    let (_c_val, p_val) = to_c_str(field_display_value);
-    let (_c_set_id, p_set_id) = to_c_str(Some(set_id));
+pub fn add_field_to_entry_set_opt(req: &FieldToEntrySetRequest<'_>) {
+    let (_c_cred_id, p_cred_id) = to_c_str(Some(req.cred_id));
+    let (_c_name, p_name) = to_c_str(Some(req.field_display_name));
+    let (_c_val, p_val) = to_c_str(req.field_display_value);
+    let (_c_set_id, p_set_id) = to_c_str(Some(req.set_id));
 
     unsafe {
-        credman_v2::AddFieldToEntrySet(p_cred_id, p_name, p_val, p_set_id, set_index);
+        credman_v2::AddFieldToEntrySet(p_cred_id, p_name, p_val, p_set_id, req.set_index);
     }
 }
 
-pub fn add_payment_entry_to_set(
-    cred_id: &str,
-    merchant_name: &str,
-    payment_method_name: Option<&str>,
-    payment_method_subtitle: Option<&str>,
-    payment_method_icon: Option<&[u8]>,
-    transaction_amount: &str,
-    bank_icon: Option<&[u8]>,
-    payment_provider_icon: Option<&[u8]>,
-    metadata: Option<&str>,
-    set_id: &str,
-    set_index: i32,
-) {
-    let (_c_cred_id, p_cred_id) = to_c_str(Some(cred_id));
-    let (_c_merchant, p_merchant) = to_c_str(Some(merchant_name));
-    let (_c_pm_name, p_pm_name) = to_c_str(payment_method_name);
-    let (_c_pm_sub, p_pm_sub) = to_c_str(payment_method_subtitle);
-    let (p_pm_icon, len_pm_icon) = to_bytes_ptr_len(payment_method_icon);
-    let (_c_amount, p_amount) = to_c_str(Some(transaction_amount));
-    let (p_bank_icon, len_bank_icon) = to_bytes_ptr_len(bank_icon);
-    let (p_pp_icon, len_pp_icon) = to_bytes_ptr_len(payment_provider_icon);
-    let (_c_metadata, p_metadata) = to_c_str(metadata);
-    let (_c_set_id, p_set_id) = to_c_str(Some(set_id));
+pub fn add_payment_entry_to_set(req: &PaymentEntryToSetRequest<'_>) {
+    let (_c_cred_id, p_cred_id) = to_c_str(Some(req.cred_id));
+    let (_c_merchant, p_merchant) = to_c_str(Some(req.merchant_name));
+    let (_c_pm_name, p_pm_name) = to_c_str(req.payment_method_name);
+    let (_c_pm_sub, p_pm_sub) = to_c_str(req.payment_method_subtitle);
+    let (p_pm_icon, len_pm_icon) = to_bytes_ptr_len(req.payment_method_icon);
+    let (_c_amount, p_amount) = to_c_str(Some(req.transaction_amount));
+    let (p_bank_icon, len_bank_icon) = to_bytes_ptr_len(req.bank_icon);
+    let (p_pp_icon, len_pp_icon) = to_bytes_ptr_len(req.payment_provider_icon);
+    let (_c_metadata, p_metadata) = to_c_str(req.metadata);
+    let (_c_set_id, p_set_id) = to_c_str(Some(req.set_id));
 
     unsafe {
         credman_v2::AddPaymentEntryToSet(
@@ -235,36 +181,23 @@ pub fn add_payment_entry_to_set(
             len_pp_icon,
             p_metadata,
             p_set_id,
-            set_index,
+            req.set_index,
         );
     }
 }
 
-pub fn add_payment_entry_to_set_v2(
-    cred_id: &str,
-    merchant_name: &str,
-    payment_method_name: Option<&str>,
-    payment_method_subtitle: Option<&str>,
-    payment_method_icon: Option<&[u8]>,
-    transaction_amount: &str,
-    bank_icon: Option<&[u8]>,
-    payment_provider_icon: Option<&[u8]>,
-    additional_info: Option<&str>,
-    metadata: Option<&str>,
-    set_id: &str,
-    set_index: i32,
-) {
-    let (_c_cred_id, p_cred_id) = to_c_str(Some(cred_id));
-    let (_c_merchant, p_merchant) = to_c_str(Some(merchant_name));
-    let (_c_pm_name, p_pm_name) = to_c_str(payment_method_name);
-    let (_c_pm_sub, p_pm_sub) = to_c_str(payment_method_subtitle);
-    let (p_pm_icon, len_pm_icon) = to_bytes_ptr_len(payment_method_icon);
-    let (_c_amount, p_amount) = to_c_str(Some(transaction_amount));
-    let (p_bank_icon, len_bank_icon) = to_bytes_ptr_len(bank_icon);
-    let (p_pp_icon, len_pp_icon) = to_bytes_ptr_len(payment_provider_icon);
-    let (_c_additional_info, p_additional_info) = to_c_str(additional_info);
-    let (_c_metadata, p_metadata) = to_c_str(metadata);
-    let (_c_set_id, p_set_id) = to_c_str(Some(set_id));
+pub fn add_payment_entry_to_set_v2(req: &PaymentEntryToSetV2Request<'_>) {
+    let (_c_cred_id, p_cred_id) = to_c_str(Some(req.cred_id));
+    let (_c_merchant, p_merchant) = to_c_str(Some(req.merchant_name));
+    let (_c_pm_name, p_pm_name) = to_c_str(req.payment_method_name);
+    let (_c_pm_sub, p_pm_sub) = to_c_str(req.payment_method_subtitle);
+    let (p_pm_icon, len_pm_icon) = to_bytes_ptr_len(req.payment_method_icon);
+    let (_c_amount, p_amount) = to_c_str(Some(req.transaction_amount));
+    let (p_bank_icon, len_bank_icon) = to_bytes_ptr_len(req.bank_icon);
+    let (p_pp_icon, len_pp_icon) = to_bytes_ptr_len(req.payment_provider_icon);
+    let (_c_additional_info, p_additional_info) = to_c_str(req.additional_info);
+    let (_c_metadata, p_metadata) = to_c_str(req.metadata);
+    let (_c_set_id, p_set_id) = to_c_str(Some(req.set_id));
 
     unsafe {
         credman_v2::AddPaymentEntryToSetV2(
@@ -282,14 +215,14 @@ pub fn add_payment_entry_to_set_v2(
             p_additional_info,
             p_metadata,
             p_set_id,
-            set_index,
+            req.set_index,
         );
     }
 }
 
-pub fn self_declare_package_info(package_display_name: &str, package_icon: Option<&[u8]>) {
-    let (_c_name, p_name) = to_c_str(Some(package_display_name));
-    let (p_icon, len_icon) = to_bytes_ptr_len(package_icon);
+pub fn self_declare_package_info(req: &PackageInfoRequest<'_>) {
+    let (_c_name, p_name) = to_c_str(Some(req.package_display_name));
+    let (p_icon, len_icon) = to_bytes_ptr_len(req.package_icon);
     unsafe {
         credman_v4::SelfDeclarePackageInfo(p_name, p_icon, len_icon);
     }

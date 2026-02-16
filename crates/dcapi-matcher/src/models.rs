@@ -1,4 +1,5 @@
 use dcapi_dcql::DcqlQuery;
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
@@ -62,10 +63,10 @@ impl RequestData {
 pub struct OpenId4VpRequest {
     /// DCQL query request.
     pub dcql_query: Option<DcqlQuery>,
-    /// Presentation Exchange request.
-    pub presentation_definition: Option<PresentationDefinition>,
     /// Transaction data constraints as defined by OpenID4VP.
     pub transaction_data: Option<Vec<TransactionDataInput>>,
+    /// Legacy Presentation Exchange request (ignored by matcher).
+    pub presentation_definition: Option<Value>,
     /// Preserved unknown fields.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Value>,
@@ -78,61 +79,9 @@ pub enum TransactionDataInput {
     /// Base64url encoded JSON object.
     Encoded(String),
     /// Decoded JSON object.
-    Decoded(dcapi_dcql::TransactionData),
+    Decoded(Box<dcapi_dcql::TransactionData>),
 }
 
-/// Presentation Exchange object used by OpenID4VP.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct PresentationDefinition {
-    /// Presentation definition identifier.
-    pub id: String,
-    /// Requested input descriptors.
-    #[serde(default)]
-    pub input_descriptors: Vec<InputDescriptor>,
-    /// Preserved unknown fields.
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, Value>,
-}
-
-/// One Presentation Exchange input descriptor.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct InputDescriptor {
-    /// Descriptor identifier.
-    pub id: String,
-    /// Optional format constraints.
-    pub format: Option<serde_json::Map<String, Value>>,
-    /// Optional claim constraints.
-    pub constraints: Option<Constraints>,
-    /// Preserved unknown fields.
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, Value>,
-}
-
-/// Presentation Exchange constraints object.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Constraints {
-    /// Requested fields.
-    #[serde(default)]
-    pub fields: Vec<FieldConstraint>,
-    /// Preserved unknown fields.
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, Value>,
-}
-
-/// Presentation Exchange field constraint.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct FieldConstraint {
-    /// JSONPath expressions.
-    #[serde(default)]
-    pub path: Vec<String>,
-    /// JSON-schema-like filter object.
-    pub filter: Option<Value>,
-    /// mdoc retention hint.
-    pub intent_to_retain: Option<bool>,
-    /// Preserved unknown fields.
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, Value>,
-}
 
 /// OpenID4VCI request payload used by the matcher.
 ///

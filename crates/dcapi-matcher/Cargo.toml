@@ -7,7 +7,7 @@ edition = "2024"
 android-credman = { workspace = true }
 dcapi-dcql = { workspace = true }
 dcapi-matcher-macros = { workspace = true }
-dcapi-matcher-tracing = { path = "../dcapi-matcher-tracing" }
+dcapi-matcher-tracing = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { workspace = true, default-features = false, features = ["alloc", "preserve_order"] }
 ciborium = { version = "0.2", default-features = false }

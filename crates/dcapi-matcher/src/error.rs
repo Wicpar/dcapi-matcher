@@ -188,6 +188,12 @@ pub enum OpenId4VpError {
         #[source]
         source: serde_json::Error,
     },
+    /// Request object handling is not supported.
+    #[error("openid4vp request object is not supported for {protocol}")]
+    RequestObjectUnsupported { protocol: String },
+    /// DCQL via `scope` is not supported.
+    #[error("dcql query via scope is not supported")]
+    DcqlScopeUnsupported,
 }
 
 /// OpenID4VCI request errors.

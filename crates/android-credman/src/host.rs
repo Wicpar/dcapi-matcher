@@ -247,42 +247,22 @@ pub trait Credman: Sync {
 
     /// Adds a standalone identity-style entry.
     fn add_string_id_entry(&self, req: &StringIdEntryRequest<'_>) {
-        abi::add_string_id_entry(
-            req.cred_id,
-            req.icon,
-            req.title,
-            req.subtitle,
-            req.disclaimer,
-            req.warning,
-        );
+        abi::add_string_id_entry(req);
     }
 
     /// Adds a field to a standalone identity-style entry.
     fn add_field_for_string_id_entry(&self, req: &FieldForStringIdEntryRequest<'_>) {
-        abi::add_field_for_string_id_entry_opt(
-            req.cred_id,
-            req.field_display_name,
-            req.field_display_value,
-        );
+        abi::add_field_for_string_id_entry_opt(req);
     }
 
     /// Adds a standalone payment entry.
     fn add_payment_entry(&self, req: &PaymentEntryRequest<'_>) {
-        abi::add_payment_entry(
-            req.cred_id,
-            req.merchant_name,
-            req.payment_method_name,
-            req.payment_method_subtitle,
-            req.payment_method_icon,
-            req.transaction_amount,
-            req.bank_icon,
-            req.payment_provider_icon,
-        );
+        abi::add_payment_entry(req);
     }
 
     /// Adds a standalone inline issuance entry.
     fn add_inline_issuance_entry(&self, req: &InlineIssuanceEntryRequest<'_>) {
-        abi::add_inline_issuance_entry(req.cred_id, req.icon, req.title, req.subtitle);
+        abi::add_inline_issuance_entry(req);
     }
 
     /// Updates verification-disclaimer metadata for a previously added entry.
@@ -290,12 +270,7 @@ pub trait Credman: Sync {
         &self,
         req: &VerificationEntryUpdateRequest<'_>,
     ) {
-        abi::set_additional_disclaimer_and_url(
-            req.cred_id,
-            req.secondary_disclaimer,
-            req.url_display_text,
-            req.url_value,
-        );
+        abi::set_additional_disclaimer_and_url(req);
     }
 
     /// Returns `Some` when set APIs are supported (`credman_v2`).
@@ -318,50 +293,22 @@ pub trait Credman: Sync {
 pub trait CredmanV2: Credman {
     /// Creates a set container.
     fn add_entry_set(&self, req: &EntrySetRequest<'_>) {
-        abi::add_entry_set(req.set_id, req.set_length);
+        abi::add_entry_set(req);
     }
 
     /// Adds an identity-style entry into a set slot.
     fn add_entry_to_set(&self, req: &EntryToSetRequest<'_>) {
-        abi::add_entry_to_set(
-            req.cred_id,
-            req.icon,
-            req.title,
-            req.subtitle,
-            req.disclaimer,
-            req.warning,
-            req.metadata,
-            req.set_id,
-            req.set_index,
-        );
+        abi::add_entry_to_set(req);
     }
 
     /// Adds a field to an entry inside a set slot.
     fn add_field_to_entry_set(&self, req: &FieldToEntrySetRequest<'_>) {
-        abi::add_field_to_entry_set_opt(
-            req.cred_id,
-            req.field_display_name,
-            req.field_display_value,
-            req.set_id,
-            req.set_index,
-        );
+        abi::add_field_to_entry_set_opt(req);
     }
 
     /// Adds a payment entry into a set slot (v2 payload shape).
     fn add_payment_entry_to_set(&self, req: &PaymentEntryToSetRequest<'_>) {
-        abi::add_payment_entry_to_set(
-            req.cred_id,
-            req.merchant_name,
-            req.payment_method_name,
-            req.payment_method_subtitle,
-            req.payment_method_icon,
-            req.transaction_amount,
-            req.bank_icon,
-            req.payment_provider_icon,
-            req.metadata,
-            req.set_id,
-            req.set_index,
-        );
+        abi::add_payment_entry_to_set(req);
     }
 }
 
@@ -369,20 +316,7 @@ pub trait CredmanV2: Credman {
 pub trait CredmanV3: CredmanV2 {
     /// Adds a payment entry into a set slot (v3 payload with `additional_info`).
     fn add_payment_entry_to_set_v2(&self, req: &PaymentEntryToSetV2Request<'_>) {
-        abi::add_payment_entry_to_set_v2(
-            req.cred_id,
-            req.merchant_name,
-            req.payment_method_name,
-            req.payment_method_subtitle,
-            req.payment_method_icon,
-            req.transaction_amount,
-            req.bank_icon,
-            req.payment_provider_icon,
-            req.additional_info,
-            req.metadata,
-            req.set_id,
-            req.set_index,
-        );
+        abi::add_payment_entry_to_set_v2(req);
     }
 }
 
@@ -390,7 +324,7 @@ pub trait CredmanV3: CredmanV2 {
 pub trait CredmanV4: CredmanV3 {
     /// Declares package info for privileged/system hosts.
     fn self_declare_package_info(&self, req: &PackageInfoRequest<'_>) {
-        abi::self_declare_package_info(req.package_display_name, req.package_icon);
+        abi::self_declare_package_info(req);
     }
 }
 

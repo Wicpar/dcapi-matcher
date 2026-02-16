@@ -1,6 +1,22 @@
-[package]
-name = "dcapi-matcher"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = [
+    "crates/android-credman",
+    "crates/android-credman-sys",
+    "crates/aptitude-consortium-dcapi-matcher",
+    "crates/dcapi-dcql",
+    "crates/dcapi-matcher-tracing",
+    "crates/dcapi-matcher-macros",
+    "crates/dcapi-matcher",
+    "crates/dcapi-matcher/examples/cm-matcher-format",
+    "crates/dcapi-matcher/examples/ubique-matcher-format",
+]
+resolver = "2"
 
-[dependencies]
+[workspace.dependencies]
+android-credman = { path = "crates/android-credman", version = "0.1.0" }
+android-credman-sys = { path = "crates/android-credman-sys", version = "0.1.0" }
+dcapi-dcql = { path = "crates/dcapi-dcql", version = "0.1.0" }
+dcapi-matcher = { path = "crates/dcapi-matcher", version = "0.1.0" }
+dcapi-matcher-macros = { path = "crates/dcapi-matcher-macros", version = "0.1.0" }
+dcapi-matcher-tracing = { path = "crates/dcapi-matcher-tracing", version = "0.1.0" }
+serde_json = { version = "1.0", default-features = false, features = ["alloc", "preserve_order"] }

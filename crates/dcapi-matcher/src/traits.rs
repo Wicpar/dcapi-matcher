@@ -1,12 +1,9 @@
-use crate::models::{FieldConstraint, InputDescriptor, PROTOCOL_OPENID4VCI, PROTOCOL_OPENID4VP};
+use crate::models::{PROTOCOL_OPENID4VCI, PROTOCOL_OPENID4VP};
 use crate::error::CredentialValidationError;
 use crate::config::{OpenId4VciConfig, OpenId4VpConfig};
 use crate::ts12::{Ts12PaymentSummary, Ts12TransactionMetadata};
-use dcapi_dcql::{
-    ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, PathElement, ValueMatch,
-};
-use alloc::string::{String, ToString};
-use alloc::vec;
+use dcapi_dcql::{ClaimsPathPointer, CredentialStore};
+use alloc::string::String;
 use alloc::vec::Vec;
 use serde_json::Value;
 
@@ -67,17 +64,12 @@ pub enum CredentialSelectionContext<'a> {
         alternative_index: usize,
         /// DCQL credential query id.
         query_id: &'a str,
+        /// Claim constraints selected for this query.
+        selected_claims: &'a [dcapi_dcql::ClaimsQuery],
         /// Transaction data decoded from request.
         transaction_data: &'a [dcapi_dcql::TransactionData],
         /// Transaction data indices bound to this query id in the selected alternative.
         transaction_data_indices: &'a [usize],
-    },
-    /// Selection produced from OpenID4VP + Presentation Definition.
-    OpenId4VpPresentationDefinition {
-        /// Request index in `DcApiRequest.requests`.
-        request_index: usize,
-        /// Input descriptor id.
-        input_descriptor_id: &'a str,
     },
     /// Selection produced from OpenID4VCI credential offer.
     OpenId4VciOffer {
@@ -96,9 +88,7 @@ impl<'a> CredentialSelectionContext<'a> {
     /// Returns a protocol label for metadata serialization.
     pub fn protocol(&self) -> &'static str {
         match self {
-            Self::OpenId4VpDcql { .. } | Self::OpenId4VpPresentationDefinition { .. } => {
-                PROTOCOL_OPENID4VP
-            }
+            Self::OpenId4VpDcql { .. } => PROTOCOL_OPENID4VP,
             Self::OpenId4VciOffer { .. } => PROTOCOL_OPENID4VCI,
         }
     }
@@ -107,11 +97,21 @@ impl<'a> CredentialSelectionContext<'a> {
 /// Store contract used by `dcapi-matcher`.
 ///
 /// This extends `dcapi_dcql::CredentialStore` so DCQL matching can be delegated to
-/// `dcapi-dcql`. Implementers only need to define how credentials are displayed and
-/// how to match Presentation Definition / OpenID4VCI constraints for their package format.
+/// `dcapi-dcql`. Implementers only need to define how credentials are displayed.
 pub trait MatcherStore: CredentialStore {
     /// Returns descriptor data for one credential.
     fn describe_credential(&self, cred: &Self::CredentialRef) -> CredentialDescriptor;
+
+    /// Returns descriptor data for one credential in a specific selection context.
+    ///
+    /// Override this to tailor fields based on requested claims (DCQL).
+    fn describe_credential_for_context(
+        &self,
+        cred: &Self::CredentialRef,
+        _context: &CredentialSelectionContext<'_>,
+    ) -> CredentialDescriptor {
+        self.describe_credential(cred)
+    }
 
     /// Returns whether this credential is available for a protocol.
     fn supports_protocol(&self, _cred: &Self::CredentialRef, _protocol: &str) -> bool {
@@ -205,221 +205,4 @@ pub trait MatcherStore: CredentialStore {
         None
     }
 
-    /// Matches a credential against one Presentation Definition descriptor.
-    fn matches_presentation_definition(
-        &self,
-        cred: &Self::CredentialRef,
-        descriptor: &InputDescriptor,
-    ) -> bool {
-        if !matches_descriptor_format(self, cred, descriptor) {
-            return false;
-        }
-
-        let Some(constraints) = &descriptor.constraints else {
-            return true;
-        };
-        for field in &constraints.fields {
-            if !matches_field_constraint(self, cred, field) {
-                return false;
-            }
-        }
-        true
-    }
-
-    /// Matches one credential against one OpenID4VCI configuration id.
-    ///
-    /// `credential_configuration` is optional because request payload may not include
-    /// issuer metadata.
-    fn matches_openid4vci_configuration(
-        &self,
-        cred: &Self::CredentialRef,
-        _credential_offer: &crate::models::CredentialOffer,
-        _credential_configuration_id: &str,
-        credential_configuration: Option<&Value>,
-    ) -> bool {
-        let Some(configuration) = credential_configuration else {
-            return false;
-        };
-        let Some(config_obj) = configuration.as_object() else {
-            return false;
-        };
-
-        if let Some(format) = config_obj.get("format").and_then(Value::as_str) {
-            let expected = CredentialFormat::from_query_format(format);
-            if self.format(cred) != expected {
-                return false;
-            }
-        }
-        if let Some(doctype) = config_obj.get("doctype").and_then(Value::as_str)
-            && !self.has_doctype(cred, doctype)
-        {
-            return false;
-        }
-        if let Some(vct) = config_obj.get("vct").and_then(Value::as_str)
-            && !self.has_vct(cred, vct)
-        {
-            return false;
-        }
-
-        true
-    }
-}
-
-fn matches_descriptor_format<S>(
-    store: &S,
-    cred: &S::CredentialRef,
-    descriptor: &InputDescriptor,
-) -> bool
-where
-    S: CredentialStore + ?Sized,
-{
-    let Some(format) = &descriptor.format else {
-        return true;
-    };
-
-    let credential_format = store.format(cred);
-    if format.contains_key("mso_mdoc") && credential_format != CredentialFormat::MsoMdoc {
-        return false;
-    }
-    if format.contains_key("dc+sd-jwt") && credential_format != CredentialFormat::DcSdJwt {
-        return false;
-    }
-
-    true
-}
-
-fn matches_field_constraint<S>(store: &S, cred: &S::CredentialRef, field: &FieldConstraint) -> bool
-where
-    S: CredentialStore + ?Sized,
-{
-    if field.path.is_empty() {
-        return false;
-    }
-
-    let expected_values = filter_expected_values(field.filter.as_ref());
-
-    for raw_path in &field.path {
-        let Some(path) = parse_json_path(raw_path) else {
-            continue;
-        };
-        if !store.has_claim_path(cred, &path) {
-            continue;
-        }
-
-        if let Some(values) = &expected_values {
-            if matches!(
-                store.match_claim_value(cred, &path, values),
-                ValueMatch::Match
-            ) {
-                return true;
-            }
-            continue;
-        }
-
-        return true;
-    }
-
-    false
-}
-
-fn filter_expected_values(filter: Option<&Value>) -> Option<Vec<ClaimValue>> {
-    let filter = filter?;
-    let obj = filter.as_object()?;
-    if let Some(value) = obj.get("const") {
-        return claim_value_from_json(value).map(|v| vec![v]);
-    }
-    let values = obj.get("enum")?.as_array()?;
-    let mut out = Vec::new();
-    for value in values {
-        let Some(converted) = claim_value_from_json(value) else {
-            continue;
-        };
-        out.push(converted);
-    }
-    if out.is_empty() { None } else { Some(out) }
-}
-
-fn claim_value_from_json(value: &Value) -> Option<ClaimValue> {
-    match value {
-        Value::String(v) => Some(ClaimValue::String(v.clone())),
-        Value::Bool(v) => Some(ClaimValue::Boolean(*v)),
-        Value::Number(v) => v.as_i64().map(ClaimValue::Integer),
-        _ => None,
-    }
-}
-
-/// Parses a JSONPath-like expression to a DCQL claims path.
-///
-/// Supported forms:
-/// - `$.a.b`
-/// - `$['a']['b']`
-/// - `$[\"a\"][\"b\"]`
-pub fn parse_json_path(path: &str) -> Option<ClaimsPathPointer> {
-    if !path.starts_with('$') {
-        return None;
-    }
-    let bytes = path.as_bytes();
-    let mut i = 1usize;
-    let mut out = Vec::new();
-
-    while i < bytes.len() {
-        match bytes[i] {
-            b'.' => {
-                i += 1;
-                let start = i;
-                while i < bytes.len() && bytes[i] != b'.' && bytes[i] != b'[' {
-                    i += 1;
-                }
-                if i == start {
-                    return None;
-                }
-                out.push(PathElement::String(path[start..i].to_string()));
-            }
-            b'[' => {
-                i += 1;
-                if i >= bytes.len() {
-                    return None;
-                }
-                if bytes[i] == b'\'' || bytes[i] == b'"' {
-                    let quote = bytes[i];
-                    i += 1;
-                    let start = i;
-                    while i < bytes.len() && bytes[i] != quote {
-                        i += 1;
-                    }
-                    if i >= bytes.len() {
-                        return None;
-                    }
-                    let key = &path[start..i];
-                    i += 1;
-                    if i >= bytes.len() || bytes[i] != b']' {
-                        return None;
-                    }
-                    i += 1;
-                    out.push(PathElement::String(key.to_string()));
-                } else if bytes[i] == b'*' {
-                    i += 1;
-                    if i >= bytes.len() || bytes[i] != b']' {
-                        return None;
-                    }
-                    i += 1;
-                    out.push(PathElement::Wildcard);
-                } else {
-                    let start = i;
-                    while i < bytes.len() && bytes[i].is_ascii_digit() {
-                        i += 1;
-                    }
-                    if i == start || i >= bytes.len() || bytes[i] != b']' {
-                        return None;
-                    }
-                    let index = path[start..i].parse::<u64>().ok()?;
-                    i += 1;
-                    out.push(PathElement::Index(index));
-                }
-            }
-            _ => return None,
-        }
-    }
-
-    if out.is_empty() { None } else { Some(out) }
 }

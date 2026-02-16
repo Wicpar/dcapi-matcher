@@ -2,7 +2,12 @@ name: CI
 
 on:
   push:
+    branches:
+      - "**"
+    tags:
+      - "*-v*.*.*"
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   release:
     types: [published]
 
@@ -35,14 +40,149 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve crate tag and version
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [ -z "$TAG" ] || [ "$TAG" = "$GITHUB_REF" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "Missing tag name" >&2
+            exit 1
+          fi
+          if ! echo "$TAG" | grep -Eq '^.+-v[0-9]+\\.[0-9]+\\.[0-9]+([.-][0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$'; then
+            echo "Tag must be in the form <crate>-vX.Y.Z or <crate>-vX.Y.Z-<pre>" >&2
+            exit 1
+          fi
+          CRATE="${TAG%-v*}"
+          VERSION="${TAG#${CRATE}-v}"
+          FILE=""
+          if [ -f "crates/${CRATE}/Cargo.toml" ]; then
+            FILE="crates/${CRATE}/Cargo.toml"
+          else
+            for CANDIDATE in crates/*/Cargo.toml; do
+              NAME="$(awk -F'\"' '/^name *=/ {print $2; exit}' "$CANDIDATE")"
+              if [ "$NAME" = "$CRATE" ]; then
+                FILE="$CANDIDATE"
+                break
+              fi
+            done
+          fi
+          if [ -z "$FILE" ]; then
+            echo "Unable to locate Cargo.toml for crate $CRATE" >&2
+            exit 1
+          fi
+          CURRENT="$(sed -n 's/^version = \"\\(.*\\)\"/\\1/p' "$FILE" | head -n1)"
+          if [ "$CURRENT" != "$VERSION" ]; then
+            echo "Tag version $VERSION does not match $CURRENT in $FILE" >&2
+            exit 1
+          fi
+          echo "crate=${CRATE}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.tag.outputs.crate == 'aptitude-consortium-dcapi-matcher'
         with:
           toolchain: 1.93.1
           targets: wasm32-unknown-unknown
       - name: Build wasm
+        if: steps.tag.outputs.crate == 'aptitude-consortium-dcapi-matcher'
         run: cargo build -p aptitude-consortium-dcapi-matcher --release --target wasm32-unknown-unknown
       - name: Upload artifact
+        if: steps.tag.outputs.crate == 'aptitude-consortium-dcapi-matcher'
         uses: actions/upload-artifact@v4
         with:
-          name: aptitude-consortium-dcapi-matcher-wasm
+          name: aptitude-consortium-dcapi-matcher-wasm-${{ steps.tag.outputs.version }}
           path: target/wasm32-unknown-unknown/release/aptitude_consortium_dcapi_matcher.wasm
+
+  publish-crate:
+    if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve crate tag and version
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [ -z "$TAG" ] || [ "$TAG" = "$GITHUB_REF" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "Missing tag name" >&2
+            exit 1
+          fi
+          if ! echo "$TAG" | grep -Eq '^.+-v[0-9]+\\.[0-9]+\\.[0-9]+([.-][0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$'; then
+            echo "Tag must be in the form <crate>-vX.Y.Z or <crate>-vX.Y.Z-<pre>" >&2
+            exit 1
+          fi
+          CRATE="${TAG%-v*}"
+          VERSION="${TAG#${CRATE}-v}"
+          FILE=""
+          if [ -f "crates/${CRATE}/Cargo.toml" ]; then
+            FILE="crates/${CRATE}/Cargo.toml"
+          else
+            for CANDIDATE in crates/*/Cargo.toml; do
+              NAME="$(awk -F'\"' '/^name *=/ {print $2; exit}' "$CANDIDATE")"
+              if [ "$NAME" = "$CRATE" ]; then
+                FILE="$CANDIDATE"
+                break
+              fi
+            done
+          fi
+          if [ -z "$FILE" ]; then
+            echo "Unable to locate Cargo.toml for crate $CRATE" >&2
+            exit 1
+          fi
+          if grep -Eq '^publish *= *false' "$FILE"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CURRENT="$(sed -n 's/^version = \"\\(.*\\)\"/\\1/p' "$FILE" | head -n1)"
+          if [ "$CURRENT" != "$VERSION" ]; then
+            echo "needs_version_update=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_version_update=false" >> "$GITHUB_OUTPUT"
+          fi
+          case "$CRATE" in
+            aptitude-consortium-dcapi-matcher|cm-matcher-format|ubique-matcher-format)
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "crate=${CRATE}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "file=${FILE}" >> "$GITHUB_OUTPUT"
+      - name: Update manifest versions
+        if: steps.tag.outputs.skip != 'true' && steps.tag.outputs.needs_version_update == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="${{ steps.tag.outputs.file }}"
+          VERSION="${{ steps.tag.outputs.version }}"
+          CRATE="${{ steps.tag.outputs.crate }}"
+          sed -i.bak -E "s/^version = \".*\"/version = \"${VERSION}\"/" "$FILE"
+          rm -f "${FILE}.bak"
+          if [ -f "Cargo.toml" ]; then
+            sed -i.bak -E "s/^(${CRATE} *= *\\{[^}]*version = \")[^\"]*(\"[^}]*\\})/\\1${VERSION}\\2/" Cargo.toml || true
+            rm -f Cargo.toml.bak
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.tag.outputs.skip != 'true'
+        with:
+          toolchain: 1.93.1
+      - name: Publish crate
+        if: steps.tag.outputs.skip != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p "${{ steps.tag.outputs.crate }}" --locked

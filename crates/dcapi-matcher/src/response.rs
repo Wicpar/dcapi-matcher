@@ -4,6 +4,7 @@ use android_credman::{
     MatcherResponse, MatcherResult, PaymentEntry, PaymentEntryRequest, PaymentEntryToSetRequest,
     PaymentEntryToSetV2Request, StringIdEntry, default_credman,
 };
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -28,12 +29,12 @@ impl ResolvedMatcherResponse {
 
     /// Adds a single credential entry.
     pub fn add_single(self, entry: ResolvedCredentialEntry) -> Self {
-        self.add_result(ResolvedMatcherResult::Single(entry))
+        self.add_result(ResolvedMatcherResult::Single(Box::new(entry)))
     }
 
     /// Adds a credential set.
     pub fn add_set(self, set: ResolvedCredentialSet) -> Self {
-        self.add_result(ResolvedMatcherResult::Set(set))
+        self.add_result(ResolvedMatcherResult::Set(Box::new(set)))
     }
 
     /// Builds a borrowed Credman response view.
@@ -81,9 +82,9 @@ impl ResolvedMatcherResponse {
 #[derive(Debug, Clone)]
 pub enum ResolvedMatcherResult {
     /// Standalone entry.
-    Single(ResolvedCredentialEntry),
+    Single(Box<ResolvedCredentialEntry>),
     /// Grouped credential set.
-    Set(ResolvedCredentialSet),
+    Set(Box<ResolvedCredentialSet>),
 }
 
 impl ResolvedMatcherResult {

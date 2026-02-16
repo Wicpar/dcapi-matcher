@@ -127,14 +127,11 @@ pub fn set_level(level: Option<Level>) {
     *LOG_LEVEL.lock() = level;
 }
 
-/// Runs `f` with the tracing collector installed for the current thread.
-pub fn with_collector<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    let dispatch = Dispatch::new(Collector);
-    let _ = tracing_core::dispatcher::set_global_default(dispatch);
-    f()
+/// Installs the tracing collector as the global default.
+///
+/// This should be called once at program start. Subsequent calls are ignored.
+pub fn set_global_default() {
+    let _ = tracing_core::dispatcher::set_global_default(Dispatch::new(Collector));
 }
 
 /// Returns and clears collected logs.

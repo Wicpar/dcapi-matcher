@@ -2,12 +2,13 @@
 name = "aptitude-consortium-dcapi-matcher"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-android-credman = { workspace = true }
+android-credman = { workspace = true, features = ["test-shim"] }
 dcapi-dcql = { workspace = true }
 dcapi-matcher = { path = "../dcapi-matcher" }
 serde = { version = "1.0", features = ["derive"] }
@@ -15,3 +16,4 @@ serde_json = { workspace = true }
 ciborium = { version = "0.2", default-features = false }
 ciborium-io = "0.2"
 tracing = { version = "0.1", default-features = false }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }

@@ -5,7 +5,7 @@ use dcapi_dcql::{
     TransactionDataType, ValueMatch,
 };
 use dcapi_matcher::{
-    CredentialDescriptor, CredentialDescriptorField, CredentialOffer, CredentialSelectionContext,
+    CredentialDescriptor, CredentialDescriptorField, CredentialSelectionContext,
     MatcherError, MatcherOptions, MatcherStore, PROTOCOL_OPENID4VCI,
     PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
     PROTOCOL_OPENID4VP_V1_UNSIGNED, ResolvedMatcherResult, Ts12ClaimMetadata, Ts12LocalizedLabel,
@@ -32,7 +32,6 @@ struct TestCredential {
     claims: Value,
     transaction_data_types: Vec<TransactionDataType>,
     ts12_metadata: Vec<Ts12TransactionMetadata>,
-    vci_configuration_ids: HashSet<String>,
     credential_metadata: Option<Value>,
 }
 
@@ -206,52 +205,14 @@ impl MatcherStore for TestStore {
         })
     }
 
-    fn matches_openid4vci_configuration(
-        &self,
-        cred: &Self::CredentialRef,
-        _credential_offer: &CredentialOffer,
-        credential_configuration_id: &str,
-        credential_configuration: Option<&Value>,
-    ) -> bool {
-        if !self
-            .get(*cred)
-            .vci_configuration_ids
-            .contains(credential_configuration_id)
-        {
-            return false;
-        }
-        let Some(configuration) = credential_configuration else {
-            return true;
-        };
-        let Some(obj) = configuration.as_object() else {
-            return true;
-        };
-        if let Some(format) = obj.get("format").and_then(Value::as_str) {
-            let expected = CredentialFormat::from_query_format(format);
-            if self.format(cred) != expected {
-                return false;
-            }
-        }
-        if let Some(vct) = obj.get("vct").and_then(Value::as_str)
-            && !self.has_vct(cred, vct)
-        {
-            return false;
-        }
-        if let Some(doctype) = obj.get("doctype").and_then(Value::as_str)
-            && !self.has_doctype(cred, doctype)
-        {
-            return false;
-        }
-        true
-    }
-
     fn openid4vp_config(&self) -> dcapi_matcher::OpenId4VpConfig {
         dcapi_matcher::OpenId4VpConfig {
             enabled: true,
             allow_dcql: true,
-            allow_presentation_definition: true,
+            allow_dcql_scope: false,
             allow_transaction_data: true,
             allow_signed_requests: false,
+            allow_response_mode_jwt: false,
         }
     }
 
@@ -260,6 +221,11 @@ impl MatcherStore for TestStore {
             enabled: true,
             allow_credential_offer: true,
             allow_credential_offer_uri: false,
+            allow_authorization_code: true,
+            allow_pre_authorized_code: true,
+            allow_tx_code: true,
+            allow_authorization_details: true,
+            allow_scope: true,
         }
     }
 
@@ -447,7 +413,6 @@ fn test_store() -> TestStore {
                 },
             ],
             ts12_metadata: vec![ts12_payment_metadata(), ts12_generic_metadata()],
-            vci_configuration_ids: HashSet::from(["pid_config".to_string()]),
             credential_metadata: Some(json!({"k0": "v0"})),
         },
         TestCredential {
@@ -461,7 +426,6 @@ fn test_store() -> TestStore {
             claims: json!({"name": "Bob", "age": 40}),
             transaction_data_types: vec![],
             ts12_metadata: vec![],
-            vci_configuration_ids: HashSet::new(),
             credential_metadata: None,
         },
         TestCredential {
@@ -478,10 +442,144 @@ fn test_store() -> TestStore {
             claims: json!({"org.iso.18013.5.1": {"family_name": "Doe"}}),
             transaction_data_types: vec![],
             ts12_metadata: vec![],
-            vci_configuration_ids: HashSet::from(["mdl_config".to_string()]),
             credential_metadata: None,
         },
     ])
+}
+
+struct VciStore {
+    config: dcapi_matcher::OpenId4VciConfig,
+}
+
+impl CredentialStore for VciStore {
+    type CredentialRef = ();
+
+    fn list_credentials(&self, _format: Option<&str>) -> Vec<Self::CredentialRef> {
+        Vec::new()
+    }
+
+    fn format(&self, _cred: &Self::CredentialRef) -> CredentialFormat {
+        CredentialFormat::DcSdJwt
+    }
+
+    fn has_vct(&self, _cred: &Self::CredentialRef, _vct: &str) -> bool {
+        false
+    }
+
+    fn supports_holder_binding(&self, _cred: &Self::CredentialRef) -> bool {
+        false
+    }
+
+    fn has_doctype(&self, _cred: &Self::CredentialRef, _doctype: &str) -> bool {
+        false
+    }
+
+    fn can_sign_transaction_data(
+        &self,
+        _cred: &Self::CredentialRef,
+        _transaction_data: &dcapi_dcql::TransactionData,
+    ) -> bool {
+        false
+    }
+
+    fn has_claim_path(&self, _cred: &Self::CredentialRef, _path: &ClaimsPathPointer) -> bool {
+        false
+    }
+
+    fn match_claim_value(
+        &self,
+        _cred: &Self::CredentialRef,
+        _path: &ClaimsPathPointer,
+        _expected_values: &[ClaimValue],
+    ) -> ValueMatch {
+        ValueMatch::NoMatch
+    }
+}
+
+impl MatcherStore for VciStore {
+    fn describe_credential(&self, _cred: &Self::CredentialRef) -> CredentialDescriptor {
+        CredentialDescriptor::new("unused", "unused")
+    }
+
+    fn supports_protocol(&self, _cred: &Self::CredentialRef, _protocol: &str) -> bool {
+        false
+    }
+
+    fn openid4vp_config(&self) -> dcapi_matcher::OpenId4VpConfig {
+        dcapi_matcher::OpenId4VpConfig::default()
+    }
+
+    fn openid4vci_config(&self) -> dcapi_matcher::OpenId4VciConfig {
+        self.config.clone()
+    }
+}
+
+struct VpOverride<'a> {
+    inner: &'a TestStore,
+    config: dcapi_matcher::OpenId4VpConfig,
+}
+
+impl<'a> CredentialStore for VpOverride<'a> {
+    type CredentialRef = usize;
+
+    fn list_credentials(&self, format: Option<&str>) -> Vec<Self::CredentialRef> {
+        self.inner.list_credentials(format)
+    }
+
+    fn format(&self, cred: &Self::CredentialRef) -> CredentialFormat {
+        self.inner.format(cred)
+    }
+
+    fn has_vct(&self, cred: &Self::CredentialRef, vct: &str) -> bool {
+        self.inner.has_vct(cred, vct)
+    }
+
+    fn supports_holder_binding(&self, cred: &Self::CredentialRef) -> bool {
+        self.inner.supports_holder_binding(cred)
+    }
+
+    fn has_doctype(&self, cred: &Self::CredentialRef, doctype: &str) -> bool {
+        self.inner.has_doctype(cred, doctype)
+    }
+
+    fn can_sign_transaction_data(
+        &self,
+        cred: &Self::CredentialRef,
+        transaction_data: &dcapi_dcql::TransactionData,
+    ) -> bool {
+        self.inner.can_sign_transaction_data(cred, transaction_data)
+    }
+
+    fn has_claim_path(&self, cred: &Self::CredentialRef, path: &ClaimsPathPointer) -> bool {
+        self.inner.has_claim_path(cred, path)
+    }
+
+    fn match_claim_value(
+        &self,
+        cred: &Self::CredentialRef,
+        path: &ClaimsPathPointer,
+        expected_values: &[ClaimValue],
+    ) -> ValueMatch {
+        self.inner.match_claim_value(cred, path, expected_values)
+    }
+}
+
+impl<'a> MatcherStore for VpOverride<'a> {
+    fn describe_credential(&self, cred: &Self::CredentialRef) -> CredentialDescriptor {
+        self.inner.describe_credential(cred)
+    }
+
+    fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
+        self.inner.supports_protocol(cred, protocol)
+    }
+
+    fn openid4vp_config(&self) -> dcapi_matcher::OpenId4VpConfig {
+        self.config.clone()
+    }
+
+    fn openid4vci_config(&self) -> dcapi_matcher::OpenId4VciConfig {
+        self.inner.openid4vci_config()
+    }
 }
 
 fn collect_set_configs(response: &dcapi_matcher::ResolvedMatcherResponse) -> Vec<Vec<String>> {
@@ -749,38 +847,6 @@ fn openid4vp_ts12_allows_fallback_locale() {
     assert!(!response.results.is_empty());
 }
 
-#[test]
-fn openid4vp_presentation_definition_constraints_are_applied() {
-    let store = test_store();
-    let request = json!({
-        "requests": [{
-            "protocol": PROTOCOL_OPENID4VP_V1_UNSIGNED,
-            "data": {
-                "presentation_definition": {
-                    "id": "pd-1",
-                    "input_descriptors": [{
-                        "id": "name_desc",
-                        "constraints": {
-                            "fields": [{
-                                "path": ["$.name"],
-                                "filter": { "const": "Alice" }
-                            }]
-                        }
-                    }]
-                }
-            }
-        }]
-    })
-    .to_string();
-
-    let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
-    let ResolvedMatcherResult::Set(set) = &response.results[0] else {
-        panic!("expected set");
-    };
-    assert_eq!(set.slots.len(), 1);
-    assert_eq!(set.slots[0].alternatives.len(), 1);
-    assert_eq!(set.slots[0].alternatives[0].credential_id, "pid-1");
-}
 
 #[test]
 fn openid4vp_signed_protocol_reports_unsupported() {
@@ -858,6 +924,122 @@ fn openid4vp_unsigned_request_ignores_client_identification_fields() {
 }
 
 #[test]
+fn openid4vp_dcql_disabled_returns_empty() {
+    let store = test_store();
+    let request = json!({
+        "requests": [{
+            "protocol": PROTOCOL_OPENID4VP_V1_UNSIGNED,
+            "data": {
+                "dcql_query": {
+                    "credentials": [
+                        { "id": "pid", "format": "dc+sd-jwt", "meta": { "vct_values": ["vct:pid"] } }
+                    ]
+                }
+            }
+        }]
+    })
+    .to_string();
+
+    let vp_config = dcapi_matcher::OpenId4VpConfig {
+        enabled: true,
+        allow_dcql: false,
+        allow_dcql_scope: false,
+        allow_transaction_data: true,
+        allow_signed_requests: false,
+        allow_response_mode_jwt: false,
+    };
+    let wrapped = VpOverride {
+        inner: &store,
+        config: vp_config.clone(),
+    };
+    let response = match_dc_api_request(&request, &wrapped, &MatcherOptions::default()).unwrap();
+    assert!(response.results.is_empty());
+}
+
+#[test]
+fn openid4vp_response_mode_jwt_is_gated() {
+    let store = test_store();
+    let request = json!({
+        "requests": [{
+            "protocol": PROTOCOL_OPENID4VP_V1_UNSIGNED,
+            "data": {
+                "response_mode": "dc_api.jwt",
+                "dcql_query": {
+                    "credentials": [
+                        { "id": "pid", "format": "dc+sd-jwt", "meta": { "vct_values": ["vct:pid"] } }
+                    ]
+                }
+            }
+        }]
+    })
+    .to_string();
+
+    let vp_config = dcapi_matcher::OpenId4VpConfig {
+        enabled: true,
+        allow_dcql: true,
+        allow_dcql_scope: false,
+        allow_transaction_data: true,
+        allow_signed_requests: false,
+        allow_response_mode_jwt: false,
+    };
+    let wrapped = VpOverride {
+        inner: &store,
+        config: vp_config.clone(),
+    };
+    let response = match_dc_api_request(&request, &wrapped, &MatcherOptions::default()).unwrap();
+    assert!(response.results.is_empty());
+
+    let wrapped = VpOverride {
+        inner: &store,
+        config: dcapi_matcher::OpenId4VpConfig {
+            allow_response_mode_jwt: true,
+            ..vp_config
+        },
+    };
+    let response = match_dc_api_request(&request, &wrapped, &MatcherOptions::default()).unwrap();
+    assert!(!response.results.is_empty());
+}
+
+#[test]
+fn openid4vp_scope_based_dcql_is_gated() {
+    let store = test_store();
+    let request = json!({
+        "requests": [{
+            "protocol": PROTOCOL_OPENID4VP_V1_UNSIGNED,
+            "data": {
+                "scope": "dcql:pid"
+            }
+        }]
+    })
+    .to_string();
+
+    let vp_config = dcapi_matcher::OpenId4VpConfig {
+        enabled: true,
+        allow_dcql: true,
+        allow_dcql_scope: false,
+        allow_transaction_data: true,
+        allow_signed_requests: false,
+        allow_response_mode_jwt: false,
+    };
+    let wrapped = VpOverride {
+        inner: &store,
+        config: vp_config.clone(),
+    };
+    let response = match_dc_api_request(&request, &wrapped, &MatcherOptions::default()).unwrap();
+    assert!(response.results.is_empty());
+
+    let wrapped = VpOverride {
+        inner: &store,
+        config: dcapi_matcher::OpenId4VpConfig {
+            allow_dcql_scope: true,
+            ..vp_config
+        },
+    };
+    let err = match_dc_api_request(&request, &wrapped, &MatcherOptions::default()).unwrap_err();
+    assert!(matches!(err, MatcherError::InvalidOpenId4Vp(_)));
+}
+
+#[test]
 fn openid4vci_direct_offer_object_is_supported() {
     let store = test_store();
     let request = json!({
@@ -876,7 +1058,7 @@ fn openid4vci_direct_offer_object_is_supported() {
         panic!("expected set");
     };
     assert_eq!(set.slots.len(), 1);
-    assert_eq!(set.slots[0].alternatives[0].credential_id, "pid-1");
+    assert_eq!(set.slots[0].alternatives[0].credential_id, "pid_config");
 }
 
 #[test]
@@ -907,7 +1089,7 @@ fn openid4vci_offer_wrapper_and_metadata_configuration_are_supported() {
     let ResolvedMatcherResult::Set(set) = &response.results[0] else {
         panic!("expected set");
     };
-    assert_eq!(set.slots[0].alternatives[0].credential_id, "pid-1");
+    assert_eq!(set.slots[0].alternatives[0].credential_id, "pid_config");
 }
 
 #[test]
@@ -1001,7 +1183,7 @@ fn openid4vci_configuration_order_is_preserved_in_slots() {
 }
 
 #[test]
-fn openid4vci_metadata_filter_can_exclude_configurations() {
+fn openid4vci_metadata_does_not_filter_configurations() {
     let store = test_store();
     let request = json!({
         "requests": [{
@@ -1025,7 +1207,7 @@ fn openid4vci_metadata_filter_can_exclude_configurations() {
     .to_string();
 
     let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
-    assert!(response.results.is_empty());
+    assert!(!response.results.is_empty());
 }
 
 #[test]
@@ -1043,6 +1225,95 @@ fn openid4vci_offer_uri_is_rejected() {
 
     let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
     assert!(response.results.is_empty());
+}
+
+#[test]
+fn openid4vci_pre_authorized_grant_honors_tx_code_support() {
+    let request = json!({
+        "requests": [{
+            "protocol": PROTOCOL_OPENID4VCI,
+            "data": {
+                "credential_offer": {
+                    "credential_issuer": "https://issuer.example",
+                    "credential_configuration_ids": ["pid_config"],
+                    "grants": {
+                        "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                            "pre-authorized_code": "code-123",
+                            "tx_code": {}
+                        }
+                    }
+                }
+            }
+        }]
+    })
+    .to_string();
+
+    let store = VciStore {
+        config: dcapi_matcher::OpenId4VciConfig {
+            enabled: true,
+            allow_credential_offer: true,
+            allow_credential_offer_uri: false,
+            allow_authorization_code: false,
+            allow_pre_authorized_code: true,
+            allow_tx_code: false,
+            allow_authorization_details: false,
+            allow_scope: false,
+        },
+    };
+    let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
+    assert!(response.results.is_empty());
+
+    let store = VciStore {
+        config: dcapi_matcher::OpenId4VciConfig {
+            allow_tx_code: true,
+            ..store.config
+        },
+    };
+    let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
+    assert!(!response.results.is_empty());
+}
+
+#[test]
+fn openid4vci_authorization_code_requires_request_method_support() {
+    let request = json!({
+        "requests": [{
+            "protocol": PROTOCOL_OPENID4VCI,
+            "data": {
+                "credential_offer": {
+                    "credential_issuer": "https://issuer.example",
+                    "credential_configuration_ids": ["pid_config"],
+                    "grants": {
+                        "authorization_code": {}
+                    }
+                }
+            }
+        }]
+    })
+    .to_string();
+
+    let store = VciStore {
+        config: dcapi_matcher::OpenId4VciConfig {
+            enabled: true,
+            allow_credential_offer: true,
+            allow_credential_offer_uri: false,
+            allow_authorization_code: true,
+            allow_pre_authorized_code: false,
+            allow_tx_code: false,
+            allow_authorization_details: false,
+            allow_scope: false,
+        },
+    };
+    let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
+    assert!(response.results.is_empty());
+
+    let store = VciStore {
+        config: dcapi_matcher::OpenId4VciConfig {
+            allow_authorization_details: true,
+            ..store.config
+        },
+    };
+    let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
+    assert!(!response.results.is_empty());
 }
 
 #[test]
@@ -1123,94 +1394,6 @@ fn matcher_options_can_disable_openid4vci_processing() {
     assert!(response.results.is_empty());
 }
 
-#[test]
-fn matcher_options_can_disable_presentation_definition_processing() {
-    let store = test_store();
-    let request = json!({
-        "requests": [{
-            "protocol": PROTOCOL_OPENID4VP_V1_UNSIGNED,
-            "data": {
-                "presentation_definition": {
-                    "id": "pd-1",
-                    "input_descriptors": [{
-                        "id": "name_desc",
-                        "constraints": {
-                            "fields": [{
-                                "path": ["$.name"],
-                                "filter": { "const": "Alice" }
-                            }]
-                        }
-                    }]
-                }
-            }
-        }]
-    })
-    .to_string();
-
-    struct PdDisabled<'a> {
-        inner: &'a TestStore,
-    }
-
-    impl<'a> CredentialStore for PdDisabled<'a> {
-        type CredentialRef = usize;
-        fn list_credentials(&self, format: Option<&str>) -> Vec<Self::CredentialRef> {
-            self.inner.list_credentials(format)
-        }
-        fn format(&self, cred: &Self::CredentialRef) -> CredentialFormat {
-            self.inner.format(cred)
-        }
-        fn has_vct(&self, cred: &Self::CredentialRef, vct: &str) -> bool {
-            self.inner.has_vct(cred, vct)
-        }
-        fn supports_holder_binding(&self, cred: &Self::CredentialRef) -> bool {
-            self.inner.supports_holder_binding(cred)
-        }
-        fn has_doctype(&self, cred: &Self::CredentialRef, doctype: &str) -> bool {
-            self.inner.has_doctype(cred, doctype)
-        }
-        fn can_sign_transaction_data(
-            &self,
-            cred: &Self::CredentialRef,
-            transaction_data: &dcapi_dcql::TransactionData,
-        ) -> bool {
-            self.inner.can_sign_transaction_data(cred, transaction_data)
-        }
-        fn has_claim_path(&self, cred: &Self::CredentialRef, path: &ClaimsPathPointer) -> bool {
-            self.inner.has_claim_path(cred, path)
-        }
-        fn match_claim_value(
-            &self,
-            cred: &Self::CredentialRef,
-            path: &ClaimsPathPointer,
-            expected_values: &[ClaimValue],
-        ) -> ValueMatch {
-            self.inner.match_claim_value(cred, path, expected_values)
-        }
-    }
-
-    impl<'a> MatcherStore for PdDisabled<'a> {
-        fn describe_credential(&self, cred: &Self::CredentialRef) -> CredentialDescriptor {
-            self.inner.describe_credential(cred)
-        }
-        fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
-            self.inner.supports_protocol(cred, protocol)
-        }
-        fn openid4vp_config(&self) -> dcapi_matcher::OpenId4VpConfig {
-            dcapi_matcher::OpenId4VpConfig {
-                enabled: true,
-                allow_presentation_definition: false,
-                allow_dcql: true,
-                allow_transaction_data: true,
-                allow_signed_requests: false,
-            }
-        }
-    }
-
-    let wrapped = PdDisabled { inner: &store };
-    let options = MatcherOptions::default();
-    let response = match_dc_api_request(&request, &wrapped, &options).unwrap();
-    assert!(response.results.is_empty());
-}
 
 #[test]
 fn unknown_protocol_is_ignored() {
@@ -1306,17 +1489,4 @@ fn openid4vp_accepts_object_and_string_data_forms() {
     let b = match_dc_api_request(&request_string, &store, &MatcherOptions::default()).unwrap();
     assert_eq!(a.results.len(), 1);
     assert_eq!(b.results.len(), 1);
-}
-
-#[test]
-fn parse_json_path_supports_bracket_notation() {
-    let path = dcapi_matcher::parse_json_path("$['a']['b'][0]").unwrap();
-    assert_eq!(
-        path,
-        vec![
-            PathElement::String("a".to_string()),
-            PathElement::String("b".to_string()),
-            PathElement::Index(0),
-        ]
-    );
 }

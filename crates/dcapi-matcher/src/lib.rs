@@ -2,6 +2,8 @@
 #![doc = include_str!("../README.md")]
 
 extern crate alloc;
+#[cfg(feature = "std")]
+extern crate std;
 
 #[cfg(feature = "std")]
 use alloc::vec::Vec;

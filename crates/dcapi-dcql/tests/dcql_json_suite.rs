@@ -640,6 +640,7 @@ fn assert_parse_error(case_dir: &Path, err: &serde_json::Error, expected_msg: Op
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn assert_plan(
     case_dir: &Path,
     _request: &DcqlQuery,

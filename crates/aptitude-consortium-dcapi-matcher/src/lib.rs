@@ -1,7 +1,8 @@
 use android_credman::CredentialReader;
+use base64::Engine;
 use dcapi_dcql::{
-    ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialSetOptionMode, CredentialStore,
-    OptionalCredentialSetsMode, PlanOptions, TransactionData, TransactionDataType, ValueMatch,
+    ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, PlanOptions,
+    TransactionData, TransactionDataType, ValueMatch,
 };
 use dcapi_matcher::{
     CredentialDescriptor, CredentialDescriptorField, LogLevel, MatcherOptions, MatcherStore,
@@ -14,108 +15,16 @@ use std::io::Read;
 
 #[derive(Debug, Deserialize)]
 struct PackageConfig {
-    #[serde(default)]
     default_id_prefix: Option<String>,
     #[serde(default)]
-    openid4vp: Option<OpenId4VpConfigConfig>,
+    openid4vp: OpenId4VpConfig,
     #[serde(default)]
-    openid4vci: Option<OpenId4VciConfigConfig>,
+    openid4vci: OpenId4VciConfig,
     #[serde(default)]
-    dcql: Option<DcqlModeConfig>,
-    #[serde(default)]
+    dcql: PlanOptions,
     log_level: Option<LogLevelConfig>,
     #[serde(default)]
     credentials: Vec<CredentialConfig>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct OpenId4VpConfigConfig {
-    #[serde(default)]
-    enabled: Option<bool>,
-    #[serde(default)]
-    allow_dcql: Option<bool>,
-    #[serde(default)]
-    allow_presentation_definition: Option<bool>,
-    #[serde(default)]
-    allow_transaction_data: Option<bool>,
-    #[serde(default)]
-    allow_signed_requests: Option<bool>,
-}
-
-impl OpenId4VpConfigConfig {
-    fn resolve(self) -> OpenId4VpConfig {
-        OpenId4VpConfig {
-            enabled: self.enabled.unwrap_or(false),
-            allow_dcql: self.allow_dcql.unwrap_or(false),
-            allow_presentation_definition: self.allow_presentation_definition.unwrap_or(false),
-            allow_transaction_data: self.allow_transaction_data.unwrap_or(false),
-            allow_signed_requests: self.allow_signed_requests.unwrap_or(false),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct OpenId4VciConfigConfig {
-    #[serde(default)]
-    enabled: Option<bool>,
-    #[serde(default)]
-    allow_credential_offer: Option<bool>,
-    #[serde(default)]
-    allow_credential_offer_uri: Option<bool>,
-}
-
-impl OpenId4VciConfigConfig {
-    fn resolve(self) -> OpenId4VciConfig {
-        OpenId4VciConfig {
-            enabled: self.enabled.unwrap_or(false),
-            allow_credential_offer: self.allow_credential_offer.unwrap_or(false),
-            allow_credential_offer_uri: self.allow_credential_offer_uri.unwrap_or(false),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct DcqlModeConfig {
-    #[serde(default)]
-    credential_set_option_mode: Option<CredentialSetOptionModeConfig>,
-    #[serde(default)]
-    optional_credential_sets_mode: Option<OptionalCredentialSetsModeConfig>,
-}
-
-#[derive(Debug, Deserialize, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-enum CredentialSetOptionModeConfig {
-    AllSatisfiable,
-    FirstSatisfiableOnly,
-}
-
-impl From<CredentialSetOptionModeConfig> for CredentialSetOptionMode {
-    fn from(value: CredentialSetOptionModeConfig) -> Self {
-        match value {
-            CredentialSetOptionModeConfig::AllSatisfiable => Self::AllSatisfiable,
-            CredentialSetOptionModeConfig::FirstSatisfiableOnly => Self::FirstSatisfiableOnly,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-enum OptionalCredentialSetsModeConfig {
-    PreferPresent,
-    PreferAbsent,
-    AlwaysPresentIfSatisfiable,
-}
-
-impl From<OptionalCredentialSetsModeConfig> for OptionalCredentialSetsMode {
-    fn from(value: OptionalCredentialSetsModeConfig) -> Self {
-        match value {
-            OptionalCredentialSetsModeConfig::PreferPresent => Self::PreferPresent,
-            OptionalCredentialSetsModeConfig::PreferAbsent => Self::PreferAbsent,
-            OptionalCredentialSetsModeConfig::AlwaysPresentIfSatisfiable => {
-                Self::AlwaysPresentIfSatisfiable
-            }
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,46 +49,33 @@ impl From<LogLevelConfig> for LogLevel {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct CredentialConfig {
-    #[serde(default)]
     id: Option<String>,
     format: String,
-    #[serde(default)]
     title: Option<String>,
-    #[serde(default)]
     subtitle: Option<String>,
-    #[serde(default)]
     disclaimer: Option<String>,
-    #[serde(default)]
     warning: Option<String>,
     #[serde(default)]
     fields: Vec<CredentialFieldConfig>,
-    #[serde(default)]
     metadata: Option<Value>,
+    icon: Option<IconConfig>,
     #[serde(default)]
-    icon: Option<Vec<u8>>,
-    #[serde(default)]
-    vct: Option<String>,
-    #[serde(default)]
+    vcts: Vec<String>,
     doctype: Option<String>,
-    #[serde(default)]
     holder_binding: Option<bool>,
-    #[serde(default)]
     claims: Option<Value>,
-    #[serde(default)]
     protocols: Option<Vec<String>>,
-    #[serde(default)]
-    vci_configuration_ids: Vec<String>,
     #[serde(default)]
     transaction_data_types: Vec<Ts12MetadataConfig>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CredentialFieldConfig {
+    path: ClaimsPathPointer,
     display_name: String,
-    #[serde(default)]
-    display_value: String,
+    display_value: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -204,7 +100,6 @@ struct Ts12ClaimConfig {
 struct Ts12LocalizedLabelConfig {
     locale: String,
     label: String,
-    #[serde(default)]
     description: Option<String>,
 }
 
@@ -221,6 +116,13 @@ struct Ts12LocalizedValueConfig {
     value: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum IconConfig {
+    Bytes(Vec<u8>),
+    Base64(String),
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedCredential {
     id: String,
@@ -229,17 +131,23 @@ struct ResolvedCredential {
     subtitle: Option<String>,
     disclaimer: Option<String>,
     warning: Option<String>,
-    fields: Vec<CredentialDescriptorField>,
+    fields: Vec<ResolvedFieldConfig>,
     metadata: Option<Value>,
     icon: Option<Vec<u8>>,
-    vct: Option<String>,
+    vcts: Vec<String>,
     doctype: Option<String>,
     holder_binding: bool,
     claims: Value,
     protocols: Option<Vec<String>>,
-    vci_configuration_ids: Vec<String>,
     transaction_data_types: Vec<TransactionDataType>,
     ts12_metadata: Vec<Ts12TransactionMetadata>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedFieldConfig {
+    path: ClaimsPathPointer,
+    display_name: String,
+    display_value: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -252,9 +160,9 @@ struct PackageStore {
 
 impl PackageStore {
     fn from_config(config: PackageConfig) -> Result<(Self, PlanOptions), String> {
-        let dcql_options = resolve_dcql_options(config.dcql.as_ref());
-        let openid4vp = config.openid4vp.unwrap_or_default().resolve();
-        let openid4vci = config.openid4vci.unwrap_or_default().resolve();
+        let dcql_options = config.dcql;
+        let openid4vp = config.openid4vp;
+        let openid4vci = config.openid4vci;
         let log_level = config.log_level.map(LogLevel::from);
         let default_prefix = config.default_id_prefix.as_deref();
 
@@ -300,7 +208,7 @@ impl CredentialStore for PackageStore {
     }
 
     fn has_vct(&self, cred: &Self::CredentialRef, vct: &str) -> bool {
-        self.get(*cred).vct.as_deref() == Some(vct)
+        self.get(*cred).vcts.iter().any(|entry| entry == vct)
     }
 
     fn supports_holder_binding(&self, cred: &Self::CredentialRef) -> bool {
@@ -351,15 +259,26 @@ impl CredentialStore for PackageStore {
 impl MatcherStore for PackageStore {
     fn describe_credential(&self, cred: &Self::CredentialRef) -> CredentialDescriptor {
         let credential = self.get(*cred);
-        let mut descriptor =
-            CredentialDescriptor::new(credential.id.clone(), credential.title.clone());
-        descriptor.subtitle = credential.subtitle.clone();
-        descriptor.disclaimer = credential.disclaimer.clone();
-        descriptor.warning = credential.warning.clone();
-        descriptor.icon = credential.icon.clone();
-        descriptor.fields = credential.fields.clone();
-        descriptor.metadata = credential.metadata.clone();
-        descriptor
+        let fields = resolve_fields_with_filter(credential, |_| true);
+        build_descriptor(credential, fields)
+    }
+
+    fn describe_credential_for_context(
+        &self,
+        cred: &Self::CredentialRef,
+        context: &dcapi_matcher::CredentialSelectionContext<'_>,
+    ) -> CredentialDescriptor {
+        let credential = self.get(*cred);
+        let fields = match context {
+            dcapi_matcher::CredentialSelectionContext::OpenId4VpDcql {
+                selected_claims,
+                ..
+            } => resolve_fields_with_filter(credential, |path| {
+                selected_claims.iter().any(|claim| claim.path == *path)
+            }),
+            dcapi_matcher::CredentialSelectionContext::OpenId4VciOffer { .. } => Vec::new(),
+        };
+        build_descriptor(credential, fields)
     }
 
     fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
@@ -381,19 +300,6 @@ impl MatcherStore for PackageStore {
         self.log_level
     }
 
-    fn matches_openid4vci_configuration(
-        &self,
-        cred: &Self::CredentialRef,
-        _credential_offer: &dcapi_matcher::CredentialOffer,
-        credential_configuration_id: &str,
-        _credential_configuration: Option<&Value>,
-    ) -> bool {
-        self.get(*cred)
-            .vci_configuration_ids
-            .iter()
-            .any(|entry| entry == credential_configuration_id)
-    }
-
     fn ts12_transaction_metadata(
         &self,
         cred: &Self::CredentialRef,
@@ -405,23 +311,6 @@ impl MatcherStore for PackageStore {
             .find(|entry| entry.data_type == transaction_data.data_type)
             .cloned()
     }
-}
-
-fn resolve_dcql_options(config: Option<&DcqlModeConfig>) -> PlanOptions {
-    let mut options = PlanOptions {
-        credential_set_option_mode: CredentialSetOptionMode::FirstSatisfiableOnly,
-        optional_credential_sets_mode: OptionalCredentialSetsMode::PreferPresent,
-    };
-    let Some(config) = config else {
-        return options;
-    };
-    if let Some(mode) = config.credential_set_option_mode.as_ref() {
-        options.credential_set_option_mode = (*mode).into();
-    }
-    if let Some(mode) = config.optional_credential_sets_mode.as_ref() {
-        options.optional_credential_sets_mode = (*mode).into();
-    }
-    options
 }
 
 fn resolve_credential(
@@ -440,11 +329,16 @@ fn resolve_credential(
     let claims = credential
         .claims
         .unwrap_or_else(|| Value::Object(Map::new()));
+    let icon = match credential.icon {
+        Some(icon) => decode_icon(icon)?,
+        None => None,
+    };
     let holder_binding = credential.holder_binding.unwrap_or(true);
     let fields = credential
         .fields
         .into_iter()
-        .map(|field| CredentialDescriptorField {
+        .map(|field| ResolvedFieldConfig {
+            path: field.path,
             display_name: field.display_name,
             display_value: field.display_value,
         })
@@ -468,13 +362,12 @@ fn resolve_credential(
         warning: credential.warning,
         fields,
         metadata: credential.metadata,
-        icon: credential.icon,
-        vct: credential.vct,
+        icon,
+        vcts: credential.vcts,
         doctype: credential.doctype,
         holder_binding,
         claims,
         protocols: credential.protocols,
-        vci_configuration_ids: credential.vci_configuration_ids,
         transaction_data_types,
         ts12_metadata,
     })
@@ -520,11 +413,85 @@ fn resolve_ts12_metadata(config: Ts12MetadataConfig) -> Ts12TransactionMetadata 
     }
 }
 
+fn build_descriptor(
+    credential: &ResolvedCredential,
+    fields: Vec<CredentialDescriptorField>,
+) -> CredentialDescriptor {
+    let mut descriptor =
+        CredentialDescriptor::new(credential.id.clone(), credential.title.clone());
+    descriptor.subtitle = credential.subtitle.clone();
+    descriptor.disclaimer = credential.disclaimer.clone();
+    descriptor.warning = credential.warning.clone();
+    descriptor.icon = credential.icon.clone();
+    descriptor.fields = fields;
+    descriptor.metadata = credential.metadata.clone();
+    descriptor
+}
+
+fn resolve_fields_with_filter<F>(
+    credential: &ResolvedCredential,
+    predicate: F,
+) -> Vec<CredentialDescriptorField>
+where
+    F: Fn(&ClaimsPathPointer) -> bool,
+{
+    credential
+        .fields
+        .iter()
+        .filter(|field| predicate(&field.path))
+        .map(|field| CredentialDescriptorField {
+            display_name: field.display_name.clone(),
+            display_value: field
+                .display_value
+                .clone()
+                .or_else(|| value_from_claims(&credential.claims, &field.path))
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
+fn value_from_claims(claims: &Value, path: &ClaimsPathPointer) -> Option<String> {
+    let Ok(nodes) = dcapi_dcql::select_nodes(claims, path) else {
+        return None;
+    };
+    nodes.first().map(|value| json_to_display(value))
+}
+
+fn json_to_display(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(v) => v.to_string(),
+        Value::Number(v) => v.to_string(),
+        Value::String(v) => v.clone(),
+        _ => value.to_string(),
+    }
+}
+
 fn decode_config(bytes: &[u8]) -> Result<PackageConfig, String> {
     if let Ok(config) = serde_json::from_slice::<PackageConfig>(bytes) {
         return Ok(config);
     }
     ciborium::from_reader(bytes).map_err(|err| format!("invalid config cbor or json: {err}"))
+}
+
+fn decode_icon(icon: IconConfig) -> Result<Option<Vec<u8>>, String> {
+    match icon {
+        IconConfig::Bytes(bytes) => Ok(if bytes.is_empty() { None } else { Some(bytes) }),
+        IconConfig::Base64(value) => {
+            if value.is_empty() {
+                return Ok(None);
+            }
+            let standard = base64::engine::general_purpose::STANDARD;
+            if let Ok(bytes) = standard.decode(value.as_bytes()) {
+                return Ok(if bytes.is_empty() { None } else { Some(bytes) });
+            }
+            let url_safe = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+            if let Ok(bytes) = url_safe.decode(value.as_bytes()) {
+                return Ok(if bytes.is_empty() { None } else { Some(bytes) });
+            }
+            Err("invalid icon base64".to_string())
+        }
+    }
 }
 
 /// Credman matcher entrypoint for aptitude consortium config packages.

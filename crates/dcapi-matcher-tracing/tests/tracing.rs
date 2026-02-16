@@ -8,11 +8,11 @@ fn take_events() -> Vec<DisplayEvent> {
 #[test]
 fn tracing_logs_are_rendered_as_fields() {
     let _ = test_shim::take_display();
+    matcher_tracing::set_global_default();
     matcher_tracing::begin();
-    matcher_tracing::with_collector(|| {
-        tracing::warn!("warning one");
-        tracing::error!("error two");
-    });
+    matcher_tracing::set_level(Some(tracing_core::Level::WARN));
+    tracing::warn!("warning one");
+    tracing::error!("error two");
     matcher_tracing::flush_and_apply();
 
     let events = take_events();
@@ -36,6 +36,7 @@ fn tracing_logs_are_rendered_as_fields() {
 #[test]
 fn tracing_flush_is_noop_when_empty() {
     let _ = test_shim::take_display();
+    matcher_tracing::set_global_default();
     matcher_tracing::begin();
     matcher_tracing::flush_and_apply();
     let events = take_events();

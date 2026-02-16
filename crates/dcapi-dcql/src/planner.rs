@@ -3,6 +3,7 @@ use crate::models::{
     TrustedAuthority,
 };
 use crate::path::{ClaimsPathPointer, PathElement, is_mdoc_path};
+use serde::{Deserialize, Serialize};
 use crate::store::{CredentialFormat, CredentialStore, ValueMatch};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use thiserror::Error;
@@ -29,7 +30,8 @@ pub struct QueryMatches<C> {
 }
 
 /// How to choose options inside each Credential Set Query.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CredentialSetOptionMode {
     /// Keep all satisfiable options.
     AllSatisfiable,
@@ -38,7 +40,8 @@ pub enum CredentialSetOptionMode {
 }
 
 /// How optional Credential Set Queries are incorporated into alternatives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OptionalCredentialSetsMode {
     /// Prefer including satisfiable optional sets first, then alternatives without them.
     PreferPresent,
@@ -49,7 +52,8 @@ pub enum OptionalCredentialSetsMode {
 }
 
 /// Planner configuration knobs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PlanOptions {
     /// Option-selection policy for each Credential Set Query.
     pub credential_set_option_mode: CredentialSetOptionMode,
@@ -971,73 +975,68 @@ where
 
     let mut transaction_credential_ids = vec![String::new(); transaction_data.len()];
     let mut out = Vec::new();
-    backtrack_transaction_assignments(
+    let mut ctx = TransactionBacktrack {
         store,
         transaction_data,
-        &options_by_td,
-        &order,
-        0,
-        &mut domains,
-        &mut transaction_credential_ids,
-        &mut out,
-    );
+        options_by_td: &options_by_td,
+        order: &order,
+        domains: &mut domains,
+        transaction_credential_ids: &mut transaction_credential_ids,
+        out: &mut out,
+    };
+    backtrack_transaction_assignments(&mut ctx, 0);
     out
 }
 
+struct TransactionBacktrack<'a, S: CredentialStore + ?Sized> {
+    store: &'a S,
+    transaction_data: &'a [TransactionData],
+    options_by_td: &'a [Vec<String>],
+    order: &'a [usize],
+    domains: &'a mut BTreeMap<String, Vec<S::CredentialRef>>,
+    transaction_credential_ids: &'a mut [String],
+    out: &'a mut Vec<TransactionAssignment<S::CredentialRef>>,
+}
+
 fn backtrack_transaction_assignments<S>(
-    store: &S,
-    transaction_data: &[TransactionData],
-    options_by_td: &[Vec<String>],
-    order: &[usize],
+    ctx: &mut TransactionBacktrack<'_, S>,
     depth: usize,
-    domains: &mut BTreeMap<String, Vec<S::CredentialRef>>,
-    transaction_credential_ids: &mut [String],
-    out: &mut Vec<TransactionAssignment<S::CredentialRef>>,
 ) where
     S: CredentialStore + ?Sized,
     S::CredentialRef: Clone,
 {
-    if depth == order.len() {
-        out.push(TransactionAssignment {
-            transaction_credential_ids: transaction_credential_ids.to_vec(),
-            domains: domains.clone(),
+    if depth == ctx.order.len() {
+        ctx.out.push(TransactionAssignment {
+            transaction_credential_ids: ctx.transaction_credential_ids.to_vec(),
+            domains: ctx.domains.clone(),
         });
         return;
     }
 
-    let td_idx = order[depth];
-    let td = &transaction_data[td_idx];
+    let td_idx = ctx.order[depth];
+    let td = &ctx.transaction_data[td_idx];
 
-    for id in &options_by_td[td_idx] {
-        let Some(current_domain) = domains.get(id).cloned() else {
+    for id in &ctx.options_by_td[td_idx] {
+        let Some(current_domain) = ctx.domains.get(id).cloned() else {
             continue;
         };
 
         let filtered_domain = current_domain
             .iter()
-            .filter(|cred| store.can_sign_transaction_data(cred, td))
+            .filter(|cred| ctx.store.can_sign_transaction_data(cred, td))
             .cloned()
             .collect::<Vec<_>>();
         if filtered_domain.is_empty() {
             continue;
         }
 
-        domains.insert(id.clone(), filtered_domain);
-        transaction_credential_ids[td_idx] = id.clone();
+        ctx.domains.insert(id.clone(), filtered_domain);
+        ctx.transaction_credential_ids[td_idx] = id.clone();
 
-        backtrack_transaction_assignments(
-            store,
-            transaction_data,
-            options_by_td,
-            order,
-            depth + 1,
-            domains,
-            transaction_credential_ids,
-            out,
-        );
+        backtrack_transaction_assignments(ctx, depth + 1);
 
-        transaction_credential_ids[td_idx].clear();
-        domains.insert(id.clone(), current_domain);
+        ctx.transaction_credential_ids[td_idx].clear();
+        ctx.domains.insert(id.clone(), current_domain);
     }
 }
 

@@ -161,15 +161,6 @@ impl MatcherStore for UbiqueCredentialPackage {
         Some(Value::Object(metadata))
     }
 
-    fn matches_openid4vci_configuration(
-        &self,
-        _cred: &Self::CredentialRef,
-        _credential_offer: &dcapi_matcher::CredentialOffer,
-        _credential_configuration_id: &str,
-        _credential_configuration: Option<&Value>,
-    ) -> bool {
-        false
-    }
 }
 
 fn value_to_id(value: &Value) -> String {

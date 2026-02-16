@@ -111,9 +111,10 @@ impl MatcherStore for CmCredentialPackage {
         OpenId4VpConfig {
             enabled: true,
             allow_dcql: true,
-            allow_presentation_definition: false,
+            allow_dcql_scope: false,
             allow_transaction_data: true,
             allow_signed_requests: true,
+            allow_response_mode_jwt: false,
         }
     }
 }

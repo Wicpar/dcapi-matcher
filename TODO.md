@@ -13,4 +13,5 @@ Here are the necessary tasks to complete to achive the following phase, do not p
      - Supported algs and configurations for openid4vp, openid4vci: none
      - etc... essentially off by default.
   6. Test cases cover 100% of the code.
+  7. An additional pass to check all validations and default params conform to [openid4vp](docs/openid_fullspec_bundle_2026-02-13/OpenID4VP_1.0.md) and [openid4vci](docs/openid_fullspec_bundle_2026-02-13/OpenID4VCI_1.0.md)
 

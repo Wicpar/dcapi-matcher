@@ -888,6 +888,7 @@ dependencies = [
  "dcapi-dcql",
  "dcapi-matcher",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
