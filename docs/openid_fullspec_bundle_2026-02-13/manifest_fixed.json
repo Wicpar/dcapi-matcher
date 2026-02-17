@@ -1,0 +1,233 @@
+{
+  "bundle_name": "openid4vp_openid4vci_fullspec_bundle_builder",
+  "generated_utc": "2026-02-13T12:16:06Z",
+  "notes": [
+    "This bundle contains a manifest + download/conversion script to fetch the authoritative full text of OpenID4VP, OpenID4VCI, and selected referenced standards, then save one Markdown file per standard.",
+    "Some referenced standards (e.g., ISO/IEC 18013-5) are not freely redistributable; the script will generate a placeholder file with an explanation/link instead."
+  ],
+  "standards": [
+    {
+      "id": "openid4vp-1.0",
+      "title": "OpenID for Verifiable Presentations 1.0",
+      "kind": "markdown",
+      "output": "OpenID4VP_1.0.md",
+      "urls": [
+        "https://raw.githubusercontent.com/openid/OpenID4VP/main/openid-4-verifiable-presentations-1_0.md",
+        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.md"
+      ]
+    },
+    {
+      "id": "openid4vci-1.0",
+      "title": "OpenID for Verifiable Credential Issuance 1.0",
+      "kind": "markdown",
+      "output": "OpenID4VCI_1.0.md",
+      "urls": [
+        "https://raw.githubusercontent.com/openid/OpenID4VCI/main/1.0/openid-4-verifiable-credential-issuance-1_0.md",
+        "https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.md"
+      ]
+    },
+    {
+      "id": "RFC6749",
+      "title": "RFC 6749 - The OAuth 2.0 Authorization Framework",
+      "kind": "text",
+      "output": "RFC6749_OAuth2.md",
+      "urls": [
+        "https://www.rfc-editor.org/rfc/rfc6749.txt"
+      ]
+    },
+    {
+      "id": "RFC8414",
+      "title": "RFC 8414 - OAuth 2.0 Authorization Server Metadata",
+      "kind": "text",
+      "output": "RFC8414_OAuthASMetadata.md",
+      "urls": [
+        "https://www.rfc-editor.org/rfc/rfc8414.txt"
+      ]
+    },
+    {
+      "id": "RFC9396",
+      "title": "RFC 9396 - OAuth 2.0 Rich Authorization Requests",
+      "kind": "text",
+      "output": "RFC9396_RAR.md",
+      "urls": [
+        "https://www.rfc-editor.org/rfc/rfc9396.txt"
+      ]
+    },
+    {
+      "id": "RFC9101",
+      "title": "RFC 9101 - JWT-Secured Authorization Request (JAR)",
+      "kind": "text",
+      "output": "RFC9101_JAR.md",
+      "urls": [
+        "https://www.rfc-editor.org/rfc/rfc9101.txt"
+      ]
+    },
+    {
+      "id": "RFC9700",
+      "title": "RFC 9700 - OAuth 2.0 Security Best Current Practice",
+      "kind": "text",
+      "output": "RFC9700_OAuthSecurityBCP.md",
+      "urls": [
+        "https://www.rfc-editor.org/rfc/rfc9700.txt"
+      ]
+    },
+    {
+      "id": "RFC7519",
+      "title": "RFC 7519 - JSON Web Token (JWT)",
+      "kind": "text",
+      "output": "RFC7519_JWT.md",
+      "urls": [
+        "https://www.rfc-editor.org/rfc/rfc7519.txt"
+      ]
+    },
+    {
+      "id": "RFC7515",
+      "title": "RFC 7515 - JSON Web Signature (JWS)",
+      "kind": "text",
+      "output": "RFC7515_JWS.md",
+      "urls": [
+        "https://www.rfc-editor.org/rfc/rfc7515.txt"
+      ]
+    },
+    {
+      "id": "RFC7516",
+      "title": "RFC 7516 - JSON Web Encryption (JWE)",
+      "kind": "text",
+      "output": "RFC7516_JWE.md",
+      "urls": [
+        "https://www.rfc-editor.org/rfc/rfc7516.txt"
+      ]
+    },
+    {
+      "id": "RFC7517",
+      "title": "RFC 7517 - JSON Web Key (JWK)",
+      "kind": "text",
+      "output": "RFC7517_JWK.md",
+      "urls": [
+        "https://www.rfc-editor.org/rfc/rfc7517.txt"
+      ]
+    },
+    {
+      "id": "RFC7591",
+      "title": "RFC 7591 - OAuth 2.0 Dynamic Client Registration Protocol",
+      "kind": "text",
+      "output": "RFC7591_DCR.md",
+      "urls": [
+        "https://www.rfc-editor.org/rfc/rfc7591.txt"
+      ]
+    },
+    {
+      "id": "RFC7636",
+      "title": "RFC 7636 - Proof Key for Code Exchange (PKCE)",
+      "kind": "text",
+      "output": "RFC7636_PKCE.md",
+      "urls": [
+        "https://www.rfc-editor.org/rfc/rfc7636.txt"
+      ]
+    },
+    {
+      "id": "RFC2119",
+      "title": "RFC 2119 - Key words for use in RFCs to Indicate Requirement Levels",
+      "kind": "text",
+      "output": "RFC2119_BCP14.md",
+      "urls": [
+        "https://www.rfc-editor.org/rfc/rfc2119.txt"
+      ]
+    },
+    {
+      "id": "RFC8174",
+      "title": "RFC 8174 - Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words",
+      "kind": "text",
+      "output": "RFC8174_BCP14.md",
+      "urls": [
+        "https://www.rfc-editor.org/rfc/rfc8174.txt"
+      ]
+    },
+    {
+      "id": "OIDC-Core-1.0",
+      "title": "OpenID Connect Core 1.0 (incorporating errata set 2)",
+      "kind": "text",
+      "output": "OpenID_Connect_Core_1.0.txt.md",
+      "urls": [
+        "https://openid.net/specs/openid-connect-core-1_0.txt"
+      ]
+    },
+    {
+      "id": "OIDC-Discovery-1.0",
+      "title": "OpenID Connect Discovery 1.0",
+      "kind": "text",
+      "output": "OpenID_Connect_Discovery_1.0.txt.md",
+      "urls": [
+        "https://openid.net/specs/openid-connect-discovery-1_0.txt"
+      ]
+    },
+    {
+      "id": "OIDC-Registration-1.0",
+      "title": "OpenID Connect Dynamic Client Registration 1.0",
+      "kind": "text",
+      "output": "OpenID_Connect_Registration_1.0.txt.md",
+      "urls": [
+        "https://openid.net/specs/openid-connect-registration-1_0.txt"
+      ]
+    },
+    {
+      "id": "OAuth-Responses-1.0",
+      "title": "OAuth 2.0 Multiple Response Type Encoding Practices (OpenID)",
+      "kind": "text",
+      "output": "OAuth2_Multiple_Response_Types_1.0.txt.md",
+      "urls": [
+        "https://openid.net/specs/oauth-v2-multiple-response-types-1_0.txt"
+      ]
+    },
+    {
+      "id": "SIOPv2-1.0",
+      "title": "Self-Issued OpenID Provider v2 (SIOPv2) 1.0",
+      "kind": "markdown",
+      "output": "SIOPv2_1.0.md",
+      "urls": [
+        "https://raw.githubusercontent.com/openid/SIOPv2/main/openid-connect-self-issued-v2-1_0.md"
+      ]
+    },
+    {
+      "id": "SD-JWT-VC",
+      "title": "IETF draft - SD-JWT-based Verifiable Credentials (latest)",
+      "kind": "text",
+      "output": "draft-ietf-oauth-sd-jwt-vc-latest.md",
+      "urls": [
+        "https://www.ietf.org/archive/id/draft-ietf-oauth-sd-jwt-vc-14.txt"
+      ]
+    },
+    {
+      "id": "W3C-VC-DM",
+      "title": "W3C Verifiable Credentials Data Model (latest TR)",
+      "kind": "html",
+      "output": "W3C_VC_Data_Model.md",
+      "urls": [
+        "https://www.w3.org/TR/vc-data-model/",
+        "https://w3c.github.io/vc-data-model/"
+      ],
+      "optional": true
+    },
+    {
+      "id": "W3C-DC-API",
+      "title": "W3C / WICG Digital Credentials API",
+      "kind": "html",
+      "output": "W3C_Digital_Credentials_API.md",
+      "urls": [
+        "https://www.w3.org/TR/digital-credentials/",
+        "https://wicg.github.io/digital-credentials/"
+      ],
+      "optional": true
+    },
+    {
+      "id": "ISO-18013-5",
+      "title": "ISO/IEC 18013-5: Mobile driving licence (mDL) application / mdoc",
+      "kind": "restricted",
+      "output": "ISO_IEC_18013-5_NOT_INCLUDED.md",
+      "urls": [
+        "https://www.iso.org/standard/69084.html"
+      ],
+      "license_restricted": true
+    }
+  ]
+}
