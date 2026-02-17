@@ -1,30 +1,28 @@
 use crate::config::{OpenId4VciConfig, OpenId4VpConfig};
 use crate::diagnostics::{self, ErrorExt};
 use crate::error::{
-    MatcherError, OpenId4VpError, OpenId4VciError, RequestDataError, TransactionDataDecodeError,
+    MatcherError, OpenId4VciError, OpenId4VpError, RequestDataError, TransactionDataDecodeError,
 };
 use crate::models::{
     CredentialOffer, DcApiRequest, OpenId4VciRequest, OpenId4VpRequest, PROTOCOL_OPENID4VCI,
     PROTOCOL_OPENID4VP, PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
     PROTOCOL_OPENID4VP_V1_UNSIGNED, RequestData, TransactionDataInput,
 };
-use android_credman::{
-    CredentialEntry, CredentialSet, CredentialSlot, Field, InlineIssuanceEntry, MatcherResponse,
-    PaymentEntry, StringIdEntry,
-};
-use crate::traits::{CredentialDescriptor, DcqlSelectionContext, MatcherStore};
+use crate::traits::{DcqlSelectionContext, MatcherStore};
 use crate::ts12;
 use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use base64::Engine;
-use dcapi_dcql::{
-    PlanOptions, SelectionAlternative, TransactionData,
+use android_credman::{
+    CredentialEntry, CredentialSet, CredentialSlot, Field, InlineIssuanceEntry, MatcherResponse,
+    PaymentEntry, StringIdEntry,
 };
+use base64::Engine;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use core::hash::Hash;
+use dcapi_dcql::{PathElement, PlanOptions, SelectionAlternative, TransactionData};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use core::hash::Hash;
 
 /// Matcher framework options.
 #[derive(Debug, Clone, Default)]
@@ -32,7 +30,6 @@ pub struct MatcherOptions {
     /// DCQL planner behavior.
     pub dcql: PlanOptions,
 }
-
 
 /// Parses and matches a DC API request with the given credential store.
 pub fn match_dc_api_request<'a, S>(
@@ -172,10 +169,7 @@ where
         return Ok(MatcherResponse::new());
     }
 
-    let scope_present = value
-        .as_object()
-        .and_then(|obj| obj.get("scope"))
-        .is_some();
+    let scope_present = value.as_object().and_then(|obj| obj.get("scope")).is_some();
 
     let request: OpenId4VpRequest = serde_json::from_value(value.clone()).map_err(|err| {
         if protocol == PROTOCOL_OPENID4VP_V1_SIGNED || protocol == PROTOCOL_OPENID4VP_V1_MULTISIGNED
@@ -257,9 +251,8 @@ fn decode_openid4vp_request_object(
 ) -> Result<Value, MatcherError> {
     match request_value {
         Value::String(raw) if is_signed_protocol => decode_openid4vp_signed_payload(protocol, &raw),
-        Value::String(raw) => serde_json::from_str(&raw).map_err(|err| {
-            MatcherError::InvalidOpenId4Vp(OpenId4VpError::Json { source: err })
-        }),
+        Value::String(raw) => serde_json::from_str(&raw)
+            .map_err(|err| MatcherError::InvalidOpenId4Vp(OpenId4VpError::Json { source: err })),
         Value::Object(obj) => Ok(Value::Object(obj)),
         other => Ok(other),
     }
@@ -279,7 +272,6 @@ fn decode_openid4vp_signed_payload(protocol: &str, jwt: &str) -> Result<Value, M
         })
     })
 }
-
 
 fn match_openid4vci_request<'s>(
     data: &RequestData,
@@ -407,13 +399,15 @@ fn build_vci_entry<'s>(
     let cred_id = configuration_id.to_string();
     let title = title.unwrap_or(configuration_id).to_string();
     let mut entry = InlineIssuanceEntry::new(cred_id, title);
-    entry.subtitle = subtitle.map(|value| Cow::Owned(value.to_string())).or_else(|| {
-        if credential_offer.credential_issuer.is_empty() {
-            None
-        } else {
-            Some(Cow::Owned(credential_offer.credential_issuer.clone()))
-        }
-    });
+    entry.subtitle = subtitle
+        .map(|value| Cow::Owned(value.to_string()))
+        .or_else(|| {
+            if credential_offer.credential_issuer.is_empty() {
+                None
+            } else {
+                Some(Cow::Owned(credential_offer.credential_issuer.clone()))
+            }
+        });
     if let Some(icon) = icon {
         entry.icon = Some(Cow::Owned(icon));
     }
@@ -470,10 +464,14 @@ fn decode_data_url(uri: &str) -> Option<Vec<u8>> {
     if data.is_empty() {
         return None;
     }
-    if let Ok(bytes) = STANDARD.decode(data.as_bytes()) && !bytes.is_empty() {
+    if let Ok(bytes) = STANDARD.decode(data.as_bytes())
+        && !bytes.is_empty()
+    {
         return Some(bytes);
     }
-    if let Ok(bytes) = URL_SAFE_NO_PAD.decode(data.as_bytes()) && !bytes.is_empty() {
+    if let Ok(bytes) = URL_SAFE_NO_PAD.decode(data.as_bytes())
+        && !bytes.is_empty()
+    {
         return Some(bytes);
     }
     None
@@ -518,19 +516,15 @@ where
                 }
             })
             .collect::<Vec<CredentialEntry<'s>>>();
-        let mut iter = alternatives.into_iter();
-        let Some(first) = iter.next() else {
+        if alternatives.is_empty() {
             continue;
-        };
-        let slot = iter.fold(CredentialSlot::new(core::iter::once(first)), |slot, entry| {
-            slot.add_alternative(entry)
-        });
+        }
+        let slot = CredentialSlot::new(alternatives);
         set = set.add_slot(slot);
     }
 
     Ok(set)
 }
-
 
 fn build_entry<'s, 'c, S>(
     store: &'s S,
@@ -541,18 +535,13 @@ fn build_entry<'s, 'c, S>(
 where
     S: MatcherStore + ?Sized,
 {
-    let descriptor = store.describe_credential(cred, context);
-    let CredentialDescriptor {
-        credential_id,
-        title,
-        icon,
-        subtitle,
-        disclaimer,
-        warning,
-        metadata: descriptor_metadata,
-        fields: descriptor_fields,
-    } = descriptor;
-    let credential_id_str = credential_id.as_ref();
+    let credential_id = store.credential_id(cred);
+    let title = store.credential_title(cred);
+    let icon = store.credential_icon(cred);
+    let subtitle = store.credential_subtitle(cred);
+    let disclaimer = store.credential_disclaimer(cred);
+    let warning = store.credential_warning(cred);
+    let credential_id_str = credential_id;
     let ts12_display = ts12::build_display_for_context(
         store,
         cred,
@@ -560,13 +549,9 @@ where
         context,
         store.preferred_locales(),
     )?;
-    let (ts12_fields, payment_summary, ts12_metadata) = match ts12_display {
-        Some(display) => (
-            display.transaction_fields,
-            display.payment_summary,
-            display.metadata,
-        ),
-        None => (Vec::new(), None, None),
+    let (ts12_fields, payment_summary) = match ts12_display {
+        Some(display) => (display.transaction_fields, display.payment_summary),
+        None => (Vec::new(), None),
     };
 
     let mut fields = ts12_fields
@@ -578,17 +563,21 @@ where
             )
         })
         .collect::<Vec<_>>();
-    fields.extend(
-        descriptor_fields
-            .into_iter()
-            .map(|field| Field::new(field.display_name, field.display_value)),
-    );
-    let metadata = merged_metadata(
-        descriptor_metadata,
-        store.metadata_for_credman(cred, context),
-        context,
-        ts12_metadata,
-    );
+    for claim in context.selected_claims {
+        if claim
+            .path
+            .iter()
+            .any(|segment| matches!(segment, PathElement::Wildcard))
+        {
+            continue;
+        }
+        let Some(label) = store.get_credential_field_label(cred, &claim.path) else {
+            continue;
+        };
+        let value = store.get_credential_field_value(cred, &claim.path);
+        fields.push(Field::new(label, value));
+    }
+    let metadata = build_metadata(context);
     let metadata = metadata
         .map(|value| serde_json::to_string(&value))
         .transpose()
@@ -596,11 +585,14 @@ where
         .map(Cow::Owned);
 
     if let Some(summary) = payment_summary {
-        let mut entry =
-            PaymentEntry::new(credential_id, summary.merchant_name, summary.transaction_amount);
-        entry.payment_method_name = Some(title);
-        entry.payment_method_subtitle = subtitle;
-        entry.payment_method_icon = icon;
+        let mut entry = PaymentEntry::new(
+            credential_id,
+            summary.merchant_name,
+            summary.transaction_amount,
+        );
+        entry.payment_method_name = Some(title.into());
+        entry.payment_method_subtitle = subtitle.map(Cow::Borrowed);
+        entry.payment_method_icon = icon.map(Cow::Borrowed);
         entry.additional_info = summary.additional_info;
         entry.metadata = metadata;
         entry.fields = fields;
@@ -608,92 +600,20 @@ where
     }
 
     let mut entry = StringIdEntry::new(credential_id, title);
-    entry.icon = icon;
-    entry.subtitle = subtitle;
-    entry.disclaimer = disclaimer;
-    entry.warning = warning;
+    entry.icon = icon.map(Cow::Borrowed);
+    entry.subtitle = subtitle.map(Cow::Borrowed);
+    entry.disclaimer = disclaimer.map(Cow::Borrowed);
+    entry.warning = warning.map(Cow::Borrowed);
     entry.metadata = metadata;
     entry.fields = fields;
 
     Ok(CredentialEntry::StringId(entry))
 }
 
-fn merged_metadata(
-    descriptor_metadata: Option<Value>,
-    dynamic_metadata: Option<Value>,
-    context: &DcqlSelectionContext<'_>,
-    ts12_metadata: Option<Value>,
-) -> Option<Value> {
-    let context_metadata = context_metadata_value(context);
-    let selection_metadata = merge_selection_metadata(dynamic_metadata, ts12_metadata);
-    match (descriptor_metadata, selection_metadata) {
-        (None, None) => Some(context_metadata),
-        (Some(base), None) => Some(merge_metadata_blocks(base, context_metadata, None)),
-        (None, Some(selection)) => Some(merge_metadata_blocks(
-            Value::Null,
-            context_metadata,
-            Some(selection),
-        )),
-        (Some(base), Some(selection)) => {
-            Some(merge_metadata_blocks(base, context_metadata, Some(selection)))
-        }
-    }
-}
-
-fn merge_selection_metadata(dynamic: Option<Value>, ts12: Option<Value>) -> Option<Value> {
-    match (dynamic, ts12) {
-        (None, None) => None,
-        (Some(dynamic), None) => Some(dynamic),
-        (None, Some(ts12)) => {
-            let mut obj = serde_json::Map::new();
-            obj.insert("ts12_display".to_string(), ts12);
-            Some(Value::Object(obj))
-        }
-        (Some(dynamic), Some(ts12)) => match dynamic {
-            Value::Object(mut obj) => {
-                obj.insert("ts12_display".to_string(), ts12);
-                Some(Value::Object(obj))
-            }
-            other => {
-                let mut obj = serde_json::Map::new();
-                obj.insert("dynamic".to_string(), other);
-                obj.insert("ts12_display".to_string(), ts12);
-                Some(Value::Object(obj))
-            }
-        },
-    }
-}
-
-fn merge_metadata_blocks(base: Value, context: Value, selection: Option<Value>) -> Value {
-    let mut obj = serde_json::Map::new();
-    if !base.is_null() {
-        obj.insert("credential_metadata".to_string(), base);
-    }
-    obj.insert("selection_context".to_string(), context);
-    if let Some(selection) = selection {
-        obj.insert("selection_metadata".to_string(), selection);
-    }
-    Value::Object(obj)
-}
-
-fn context_metadata_value(context: &DcqlSelectionContext<'_>) -> Value {
+fn build_metadata(context: &DcqlSelectionContext<'_>) -> Option<Value> {
     let mut obj = serde_json::Map::new();
     obj.insert(
-        "protocol".to_string(),
-        Value::String(context.protocol().to_string()),
-    );
-
-    obj.insert("source".to_string(), Value::String("dcql".to_string()));
-    obj.insert(
-        "request_index".to_string(),
-        Value::from(context.request_index as u64),
-    );
-    obj.insert(
-        "alternative_index".to_string(),
-        Value::from(context.alternative_index as u64),
-    );
-    obj.insert(
-        "credential_query_id".to_string(),
+        "credential_id".to_string(),
         Value::String(context.query_id.to_string()),
     );
     obj.insert(
@@ -706,19 +626,7 @@ fn context_metadata_value(context: &DcqlSelectionContext<'_>) -> Value {
                 .collect(),
         ),
     );
-    let mut selected_transaction_data = Vec::new();
-    for idx in context.transaction_data_indices {
-        if let Some(value) = context.transaction_data.get(*idx)
-            && let Ok(serialized) = serde_json::to_value(value)
-        {
-            selected_transaction_data.push(serialized);
-        }
-    }
-    obj.insert(
-        "transaction_data".to_string(),
-        Value::Array(selected_transaction_data),
-    );
-    Value::Object(obj)
+    Some(Value::Object(obj))
 }
 
 fn decode_transaction_data(
@@ -865,7 +773,6 @@ pub fn decode_request_data<T: DeserializeOwned>(data: &RequestData) -> Result<T,
     let value = data
         .to_value()
         .map_err(|err| MatcherError::InvalidRequestData(RequestDataError::Json { source: err }))?;
-    serde_json::from_value(value).map_err(|err| {
-        MatcherError::InvalidRequestData(RequestDataError::Json { source: err })
-    })
+    serde_json::from_value(value)
+        .map_err(|err| MatcherError::InvalidRequestData(RequestDataError::Json { source: err }))
 }

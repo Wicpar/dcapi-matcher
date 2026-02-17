@@ -68,14 +68,6 @@ impl<'a> StringIdEntry<'a> {
     }
 }
 
-fn normalize<'a>(value: Cow<'a, str>) -> Cow<'a, str> {
-    if value.is_empty() {
-        Cow::Borrowed("_")
-    } else {
-        value
-    }
-}
-
 impl<'a> CredmanApply<()> for StringIdEntry<'a> {
     fn apply(&self, _: ()) {
         let host = default_credman();

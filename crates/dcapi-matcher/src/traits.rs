@@ -1,60 +1,9 @@
+use crate::config::{OpenId4VciConfig, OpenId4VpConfig};
 use crate::diagnostics::LogLevel;
 use crate::models::PROTOCOL_OPENID4VP;
-use crate::config::{OpenId4VciConfig, OpenId4VpConfig};
 use crate::ts12::{Ts12PaymentSummary, Ts12TransactionMetadata};
 use dcapi_dcql::{ClaimsPathPointer, CredentialStore};
-use alloc::borrow::Cow;
-use alloc::vec::Vec;
 use serde_json::Value;
-
-/// User-facing credential descriptor used to build Credman entries.
-#[derive(Debug, Clone)]
-pub struct CredentialDescriptor<'a> {
-    /// Credential selection id returned to host.
-    pub credential_id: Cow<'a, str>,
-    /// Entry title.
-    pub title: Cow<'a, str>,
-    /// Optional icon bytes.
-    pub icon: Option<Cow<'a, [u8]>>,
-    /// Optional subtitle.
-    pub subtitle: Option<Cow<'a, str>>,
-    /// Optional disclaimer.
-    pub disclaimer: Option<Cow<'a, str>>,
-    /// Optional warning.
-    pub warning: Option<Cow<'a, str>>,
-    /// Optional credential-scoped metadata object.
-    pub metadata: Option<Value>,
-    /// Display fields.
-    pub fields: Vec<CredentialDescriptorField<'a>>,
-}
-
-impl<'a> CredentialDescriptor<'a> {
-    /// Creates a descriptor with mandatory fields.
-    pub fn new(
-        credential_id: impl Into<Cow<'a, str>>,
-        title: impl Into<Cow<'a, str>>,
-    ) -> Self {
-        Self {
-            credential_id: credential_id.into(),
-            title: title.into(),
-            icon: None,
-            subtitle: None,
-            disclaimer: None,
-            warning: None,
-            metadata: None,
-            fields: Vec::new(),
-        }
-    }
-}
-
-/// One label/value field for credential detail rendering.
-#[derive(Debug, Clone)]
-pub struct CredentialDescriptorField<'a> {
-    /// Field label.
-    pub display_name: Cow<'a, str>,
-    /// Field value.
-    pub display_value: Option<Cow<'a, str>>,
-}
 
 /// Context passed when building Credman metadata for one candidate entry.
 #[derive(Debug)]
@@ -85,12 +34,53 @@ impl DcqlSelectionContext<'_> {
 /// This extends `dcapi_dcql::CredentialStore` so DCQL matching can be delegated to
 /// `dcapi-dcql`. Implementers only need to define how credentials are displayed.
 pub trait MatcherStore: CredentialStore {
-    /// Returns descriptor data for one credential in a specific selection context.
-    fn describe_credential<'a>(
+    /// Credential selection id returned to host.
+    fn credential_id<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str;
+
+    /// Entry title.
+    fn credential_title<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str;
+
+    /// Optional icon bytes.
+    fn credential_icon<'a>(&'a self, _cred: &Self::CredentialRef) -> Option<&'a [u8]> {
+        None
+    }
+
+    /// Optional subtitle.
+    fn credential_subtitle<'a>(&'a self, _cred: &Self::CredentialRef) -> Option<&'a str> {
+        None
+    }
+
+    /// Optional disclaimer.
+    fn credential_disclaimer<'a>(&'a self, _cred: &Self::CredentialRef) -> Option<&'a str> {
+        None
+    }
+
+    /// Optional warning.
+    fn credential_warning<'a>(&'a self, _cred: &Self::CredentialRef) -> Option<&'a str> {
+        None
+    }
+
+    /// Optional display field label for a claim path.
+    ///
+    /// Return `None` when the path includes wildcards (`null` entries).
+    fn get_credential_field_label<'a>(
         &'a self,
-        cred: &Self::CredentialRef,
-        context: &DcqlSelectionContext<'_>,
-    ) -> CredentialDescriptor<'a>;
+        _cred: &Self::CredentialRef,
+        _path: &ClaimsPathPointer,
+    ) -> Option<&'a str> {
+        None
+    }
+
+    /// Optional display field value for a claim path.
+    ///
+    /// Return `None` when the path includes wildcards (`null` entries).
+    fn get_credential_field_value<'a>(
+        &'a self,
+        _cred: &Self::CredentialRef,
+        _path: &ClaimsPathPointer,
+    ) -> Option<&'a str> {
+        None
+    }
 
     /// Returns whether this credential is available for a protocol.
     fn supports_protocol(&self, _cred: &Self::CredentialRef, _protocol: &str) -> bool {
@@ -107,22 +97,11 @@ pub trait MatcherStore: CredentialStore {
         OpenId4VciConfig::default()
     }
 
-    /// Preferred locales for UI rendering, in priority order.
-    fn preferred_locales(&self) -> &[&str] {
-        &[]
-    }
+    /// Preferred locales (RFC5646 identifiers) for UI rendering, in priority order.
+    fn preferred_locales(&self) -> &[&str];
 
     /// Logging level for matcher diagnostics. `None` disables logging.
     fn log_level(&self) -> Option<LogLevel> {
-        None
-    }
-
-    /// Optional protocol-specific metadata to attach to Credman set entries.
-    fn metadata_for_credman(
-        &self,
-        _cred: &Self::CredentialRef,
-        _context: &DcqlSelectionContext<'_>,
-    ) -> Option<Value> {
         None
     }
 
@@ -173,5 +152,4 @@ pub trait MatcherStore: CredentialStore {
     ) -> Option<String> {
         None
     }
-
 }

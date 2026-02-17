@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Wallet-supported OpenID4VP features.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OpenId4VpConfig {
     /// Whether OpenID4VP requests are supported at all.
@@ -26,7 +26,7 @@ impl OpenId4VpConfig {
 }
 
 /// Wallet-supported OpenID4VCI features.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OpenId4VciConfig {
     /// Whether OpenID4VCI requests are supported at all.

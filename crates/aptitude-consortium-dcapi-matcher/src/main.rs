@@ -2,13 +2,16 @@ use android_credman::CredmanApplyExt;
 use base64::Engine;
 use dcapi_dcql::{
     ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, PlanOptions, TransactionData,
-    TransactionDataType, ValueMatch, path_matches,
+    TransactionDataType, ValueMatch, path_matches, PathElement,
 };
 use dcapi_matcher::diagnostics::error;
-use dcapi_matcher::{CredentialDescriptor, CredentialDescriptorField, LogLevel, MatcherOptions, MatcherStore, OpenId4VciConfig, OpenId4VpConfig, Ts12ClaimMetadata, Ts12LocalizedLabel, Ts12LocalizedValue, Ts12TransactionMetadata, Ts12UiLabels, dcapi_matcher, match_dc_api_request, decode_json_package};
+use dcapi_matcher::{
+    LogLevel, MatcherOptions, MatcherStore, OpenId4VciConfig, OpenId4VpConfig, Ts12ClaimMetadata,
+    Ts12LocalizedLabel, Ts12LocalizedValue, Ts12TransactionMetadata, Ts12UiLabels, dcapi_matcher,
+    decode_json_package, match_dc_api_request,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use std::borrow::Cow;
 
 #[derive(Debug, Deserialize)]
 struct PackageConfig {
@@ -237,13 +240,70 @@ impl CredentialStore for PackageStore {
 }
 
 impl MatcherStore for PackageStore {
-    fn describe_credential<'a>(
+    fn credential_id<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str {
+        self.get(*cred).id.as_str()
+    }
+
+    fn credential_title<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str {
+        self.get(*cred).title.as_str()
+    }
+
+    fn credential_subtitle<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a str> {
+        self.get(*cred).subtitle.as_deref()
+    }
+
+    fn credential_disclaimer<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a str> {
+        self.get(*cred).disclaimer.as_deref()
+    }
+
+    fn credential_warning<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a str> {
+        self.get(*cred).warning.as_deref()
+    }
+
+    fn credential_icon<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a [u8]> {
+        self.get(*cred).icon.as_deref()
+    }
+
+    fn get_credential_field_label<'a>(
         &'a self,
         cred: &Self::CredentialRef,
-        context: &dcapi_matcher::DcqlSelectionContext<'_>,
-    ) -> CredentialDescriptor<'a> {
+        path: &ClaimsPathPointer,
+    ) -> Option<&'a str> {
+        if path_has_wildcard(path) {
+            return None;
+        }
         let credential = self.get(*cred);
-        build_descriptor(credential, fields_from_selected_claims(credential, context.selected_claims))
+        if let Some(metadata) = credential.metadata.as_ref() {
+            if let Some(display_name) = claim_display_name_from_metadata(metadata, path) {
+                return Some(display_name);
+            }
+        }
+        credential
+            .fields
+            .iter()
+            .find(|field| path_matches(&field.path, path))
+            .map(|field| field.display_name.as_str())
+    }
+
+    fn get_credential_field_value<'a>(
+        &'a self,
+        cred: &Self::CredentialRef,
+        path: &ClaimsPathPointer,
+    ) -> Option<&'a str> {
+        if path_has_wildcard(path) {
+            return None;
+        }
+        let credential = self.get(*cred);
+        if let Some(field) = credential
+            .fields
+            .iter()
+            .find(|field| path_matches(&field.path, path))
+        {
+            if let Some(value) = field.display_value.as_deref() {
+                return Some(value);
+            }
+        }
+        value_from_claims(&credential.claims, path)
     }
 
     fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
@@ -254,11 +314,16 @@ impl MatcherStore for PackageStore {
     }
 
     fn openid4vp_config(&self) -> OpenId4VpConfig {
-        self.openid4vp.clone()
+        self.openid4vp
     }
 
     fn openid4vci_config(&self) -> OpenId4VciConfig {
-        self.openid4vci.clone()
+        self.openid4vci
+    }
+
+    fn preferred_locales(&self) -> &[&str] {
+        static LOCALES: [&str; 1] = ["en"];
+        &LOCALES
     }
 
     fn log_level(&self) -> Option<LogLevel> {
@@ -378,69 +443,10 @@ fn resolve_ts12_metadata(config: Ts12MetadataConfig) -> Ts12TransactionMetadata 
     }
 }
 
-fn build_descriptor<'a>(
-    credential: &'a ResolvedCredential,
-    fields: Vec<CredentialDescriptorField<'a>>,
-) -> CredentialDescriptor<'a> {
-    let mut descriptor =
-        CredentialDescriptor::new(credential.id.as_str(), credential.title.as_str());
-    descriptor.subtitle = credential.subtitle.as_deref().map(Cow::Borrowed);
-    descriptor.disclaimer = credential.disclaimer.as_deref().map(Cow::Borrowed);
-    descriptor.warning = credential.warning.as_deref().map(Cow::Borrowed);
-    descriptor.icon = credential.icon.as_deref().map(Cow::Borrowed);
-    descriptor.fields = fields;
-    descriptor.metadata = credential.metadata.clone();
-    descriptor
-}
-
-fn fields_from_selected_claims<'a>(
-    credential: &'a ResolvedCredential,
-    selected_claims: &[dcapi_dcql::ClaimsQuery],
-) -> Vec<CredentialDescriptorField<'a>> {
-    selected_claims
-        .iter()
-        .filter_map(|claim| {
-            if let Some(metadata) = credential.metadata.as_ref() {
-                if let Some(display_name) =
-                    claim_display_name_from_metadata(metadata, &claim.path)
-                {
-                    let display_value = value_from_claims(&credential.claims, &claim.path);
-                    return Some(CredentialDescriptorField {
-                        display_name,
-                        display_value,
-                    });
-                }
-            }
-
-            field_from_config(credential, &claim.path)
-        })
-        .collect()
-}
-
-fn field_from_config<'a>(
-    credential: &'a ResolvedCredential,
-    claim_path: &ClaimsPathPointer,
-) -> Option<CredentialDescriptorField<'a>> {
-    let field = credential
-        .fields
-        .iter()
-        .find(|field| path_matches(&field.path, claim_path))?;
-    let display_name = Cow::Borrowed(field.display_name.as_str());
-    let display_value = field
-        .display_value
-        .as_deref()
-        .map(Cow::Borrowed)
-        .or_else(|| value_from_claims(&credential.claims, claim_path));
-    Some(CredentialDescriptorField {
-        display_name,
-        display_value,
-    })
-}
-
 fn claim_display_name_from_metadata<'a>(
     metadata: &'a Value,
     claim_path: &ClaimsPathPointer,
-) -> Option<Cow<'a, str>> {
+) -> Option<&'a str> {
     for claims in claims_description_arrays(metadata) {
         for entry in claims {
             let path_value = entry.get("path")?;
@@ -452,7 +458,7 @@ fn claim_display_name_from_metadata<'a>(
                 for display_entry in display {
                     if let Some(name) = display_entry.get("name").and_then(Value::as_str) {
                         if !name.is_empty() {
-                            return Some(Cow::Borrowed(name));
+                            return Some(name);
                         }
                     }
                 }
@@ -477,22 +483,15 @@ fn claims_description_arrays(metadata: &Value) -> Vec<&Vec<Value>> {
     out
 }
 
-fn value_from_claims<'a>(claims: &'a Value, path: &ClaimsPathPointer) -> Option<Cow<'a, str>> {
+fn value_from_claims<'a>(claims: &'a Value, path: &ClaimsPathPointer) -> Option<&'a str> {
     let Ok(nodes) = dcapi_dcql::select_nodes(claims, path) else {
         return None;
     };
-    nodes.first().map(|value| json_to_display(value))
+    nodes.first().and_then(|value| value.as_str())
 }
 
-fn json_to_display(value: &Value) -> Cow<str> {
-    match value {
-        Value::Null => Cow::Borrowed("null"),
-        Value::Bool(v) => v.to_string().into(),
-        Value::Number(v) => v.to_string().into(),
-        Value::String(v) => Cow::Borrowed(v),
-        Value::Array(_) => Cow::Borrowed("[Array]"),
-        Value::Object(_) => Cow::Borrowed("[Object]"),
-    }
+fn path_has_wildcard(path: &ClaimsPathPointer) -> bool {
+    path.iter().any(|segment| matches!(segment, PathElement::Wildcard))
 }
 
 fn decode_config(bytes: &[u8]) -> Option<PackageConfig> {
@@ -528,12 +527,7 @@ pub fn matcher_entrypoint(request: String, credentials: String) {
     dcapi_matcher::diagnostics::set_level(config.log_level);
 
     let Ok((store, dcql_options)) = PackageStore::from_config(config)
-        .inspect_err(|err| {
-            error(format!(
-                "credential package validation error: {}",
-                err
-            ))
-        })
+        .inspect_err(|err| error(format!("credential package validation error: {}", err)))
     else {
         return;
     };

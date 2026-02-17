@@ -29,13 +29,10 @@ entry/set structures.
 
 ## Metadata Model
 
-For each candidate credential, metadata passed to Credman can combine:
+For each candidate credential, metadata passed to Credman includes only:
 
-- `CredentialDescriptor.metadata` (credential-level metadata),
-- framework-generated `selection_context` metadata (protocol/query context),
-- `MatcherStore::metadata_for_credman` (dynamic app-defined metadata).
-
-JSON object keys are stored in deterministic order (serde_json default BTreeMap; insertion order is not preserved).
+- `credential_id` (the DCQL credential query id)
+- `transaction_data_indices` (indices into the request `transaction_data` array)
 
 ## Diagnostics Rendering
 

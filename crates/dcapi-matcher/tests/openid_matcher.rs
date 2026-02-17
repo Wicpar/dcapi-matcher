@@ -1,14 +1,13 @@
-use android_credman::test_shim::{self, DisplayEvent};
 use android_credman::CredmanApplyExt;
+use android_credman::test_shim::{self, DisplayEvent};
 use base64::Engine;
 use dcapi_dcql::{
     ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, PathElement,
     TransactionDataType, ValueMatch,
 };
 use dcapi_matcher::{
-    CredentialDescriptor, CredentialDescriptorField, CredentialEntry, DcqlSelectionContext, Field,
-    MatcherError, MatcherOptions, MatcherResult, MatcherStore, PROTOCOL_OPENID4VCI,
-    PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
+    CredentialEntry, Field, MatcherError, MatcherOptions, MatcherResult, MatcherStore,
+    PROTOCOL_OPENID4VCI, PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
     PROTOCOL_OPENID4VP_V1_UNSIGNED, Ts12ClaimMetadata, Ts12LocalizedLabel, Ts12LocalizedValue,
     Ts12PaymentSummary, Ts12TransactionMetadata, decode_json_package, match_dc_api_request,
 };
@@ -101,7 +100,9 @@ impl CredentialStore for TestStore {
     }
 
     fn has_claim_path(&self, cred: &Self::CredentialRef, path: &ClaimsPathPointer) -> bool {
-        dcapi_dcql::select_nodes(&self.get(*cred).claims, path).is_ok()
+        dcapi_dcql::select_nodes(&self.get(*cred).claims, path)
+            .map(|nodes| !nodes.is_empty())
+            .unwrap_or(false)
     }
 
     fn match_claim_value(
@@ -127,42 +128,38 @@ impl CredentialStore for TestStore {
 }
 
 impl MatcherStore for TestStore {
-    fn describe_credential<'a>(
+    fn credential_id<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str {
+        self.get(*cred).id.as_str()
+    }
+
+    fn credential_title<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str {
+        self.get(*cred).title.as_str()
+    }
+
+    fn get_credential_field_label<'a>(
+        &'a self,
+        _cred: &Self::CredentialRef,
+        path: &ClaimsPathPointer,
+    ) -> Option<&'a str> {
+        if path.iter().any(|segment| matches!(segment, PathElement::Wildcard)) {
+            return None;
+        }
+        Some("name")
+    }
+
+    fn get_credential_field_value<'a>(
         &'a self,
         cred: &Self::CredentialRef,
-        _context: &DcqlSelectionContext<'_>,
-    ) -> CredentialDescriptor<'a> {
-        let credential = self.get(*cred);
-        let mut descriptor =
-            CredentialDescriptor::new(credential.id.as_str(), credential.title.as_str());
-        descriptor.subtitle = Some(Cow::Owned(format!("subtitle-{}", credential.id)));
-        descriptor.fields.push(CredentialDescriptorField {
-            display_name: "name".into(),
-            display_value: credential.title.as_str().into(),
-        });
-        descriptor.metadata = credential.credential_metadata.clone();
-        descriptor
+        path: &ClaimsPathPointer,
+    ) -> Option<&'a str> {
+        if path.iter().any(|segment| matches!(segment, PathElement::Wildcard)) {
+            return None;
+        }
+        Some(self.get(*cred).title.as_str())
     }
 
     fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
         self.get(*cred).protocols.contains(protocol)
-    }
-
-    fn metadata_for_credman(
-        &self,
-        cred: &Self::CredentialRef,
-        context: &DcqlSelectionContext<'_>,
-    ) -> Option<Value> {
-        let mut obj = serde_json::Map::new();
-        obj.insert(
-            "selected_credential".to_string(),
-            Value::String(self.get(*cred).id.clone()),
-        );
-        obj.insert(
-            "context_protocol".to_string(),
-            Value::String(context.protocol().to_string()),
-        );
-        Some(Value::Object(obj))
     }
 
     fn ts12_transaction_metadata(
@@ -196,7 +193,10 @@ impl MatcherStore for TestStore {
             .and_then(Value::as_str)?
             .to_string();
         let amount = payload.get("amount")?.to_string();
-        let currency = payload.get("currency").and_then(Value::as_str).unwrap_or("");
+        let currency = payload
+            .get("currency")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let transaction_amount = if currency.is_empty() {
             amount
         } else {
@@ -501,12 +501,12 @@ impl CredentialStore for VciStore {
 }
 
 impl MatcherStore for VciStore {
-    fn describe_credential<'a>(
-        &'a self,
-        _cred: &Self::CredentialRef,
-        _context: &DcqlSelectionContext<'_>,
-    ) -> CredentialDescriptor<'a> {
-        CredentialDescriptor::new("unused", "unused")
+    fn credential_id<'a>(&'a self, _cred: &Self::CredentialRef) -> &'a str {
+        "unused"
+    }
+
+    fn credential_title<'a>(&'a self, _cred: &Self::CredentialRef) -> &'a str {
+        "unused"
     }
 
     fn supports_protocol(&self, _cred: &Self::CredentialRef, _protocol: &str) -> bool {
@@ -518,7 +518,11 @@ impl MatcherStore for VciStore {
     }
 
     fn openid4vci_config(&self) -> dcapi_matcher::OpenId4VciConfig {
-        self.config.clone()
+        self.config
+    }
+
+    fn preferred_locales(&self) -> &[&str] {
+        &[]
     }
 }
 
@@ -573,12 +577,44 @@ impl<'a> CredentialStore for VpOverride<'a> {
 }
 
 impl<'a> MatcherStore for VpOverride<'a> {
-    fn describe_credential<'b>(
+    fn credential_id<'b>(&'b self, cred: &Self::CredentialRef) -> &'b str {
+        self.inner.credential_id(cred)
+    }
+
+    fn credential_title<'b>(&'b self, cred: &Self::CredentialRef) -> &'b str {
+        self.inner.credential_title(cred)
+    }
+
+    fn credential_icon<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b [u8]> {
+        self.inner.credential_icon(cred)
+    }
+
+    fn credential_subtitle<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b str> {
+        self.inner.credential_subtitle(cred)
+    }
+
+    fn credential_disclaimer<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b str> {
+        self.inner.credential_disclaimer(cred)
+    }
+
+    fn credential_warning<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b str> {
+        self.inner.credential_warning(cred)
+    }
+
+    fn get_credential_field_label<'b>(
         &'b self,
         cred: &Self::CredentialRef,
-        context: &DcqlSelectionContext<'_>,
-    ) -> CredentialDescriptor<'b> {
-        self.inner.describe_credential(cred, context)
+        path: &ClaimsPathPointer,
+    ) -> Option<&'b str> {
+        self.inner.get_credential_field_label(cred, path)
+    }
+
+    fn get_credential_field_value<'b>(
+        &'b self,
+        cred: &Self::CredentialRef,
+        path: &ClaimsPathPointer,
+    ) -> Option<&'b str> {
+        self.inner.get_credential_field_value(cred, path)
     }
 
     fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
@@ -586,11 +622,15 @@ impl<'a> MatcherStore for VpOverride<'a> {
     }
 
     fn openid4vp_config(&self) -> dcapi_matcher::OpenId4VpConfig {
-        self.config.clone()
+        self.config
     }
 
     fn openid4vci_config(&self) -> dcapi_matcher::OpenId4VciConfig {
         self.inner.openid4vci_config()
+    }
+
+    fn preferred_locales(&self) -> &[&str] {
+        self.inner.preferred_locales()
     }
 }
 
@@ -615,15 +655,6 @@ fn entry_fields<'a>(entry: &'a CredentialEntry<'a>) -> &'a [Field<'a>] {
     }
 }
 
-fn query_id_from_metadata(metadata: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(metadata).ok()?;
-    value
-        .get("selection_context")
-        .and_then(|context| context.get("credential_query_id"))
-        .and_then(Value::as_str)
-        .map(|id| id.to_string())
-}
-
 fn collect_set_configs(response: &dcapi_matcher::MatcherResponse) -> Vec<Vec<String>> {
     let mut out = Vec::new();
     for result in &response.results {
@@ -633,8 +664,13 @@ fn collect_set_configs(response: &dcapi_matcher::MatcherResponse) -> Vec<Vec<Str
                 .iter()
                 .filter_map(|slot| {
                     let entry = slot.alternatives.first()?;
-                    let metadata = entry_metadata(entry)?;
-                    query_id_from_metadata(metadata)
+                    Some(
+                        entry_cred_id(entry)
+                            .split('-')
+                            .next()
+                            .unwrap_or("")
+                            .to_string(),
+                    )
                 })
                 .collect::<Vec<_>>();
             ids.sort();
@@ -731,8 +767,8 @@ fn openid4vp_transaction_data_encoded_is_decoded_and_attached() {
     };
     let first = &set.slots[0].alternatives[0];
     let metadata = entry_metadata(first).unwrap();
-    assert!(metadata.contains("\"credential_query_id\":\"pid\""));
-    assert!(metadata.contains("\"transaction_data\""));
+    assert!(metadata.contains("\"credential_id\":\"pid\""));
+    assert!(metadata.contains("\"transaction_data_indices\":[0]"));
 }
 
 #[test]
@@ -893,7 +929,6 @@ fn openid4vp_ts12_allows_fallback_locale() {
     assert!(!response.results.is_empty());
 }
 
-
 #[test]
 fn openid4vp_signed_protocol_reports_unsupported() {
     let store = test_store();
@@ -980,7 +1015,11 @@ fn openid4vp_dcql_disabled_returns_empty() {
                     "credentials": [
                         { "id": "pid", "format": "dc+sd-jwt", "meta": { "vct_values": ["vct:pid"] } }
                     ]
-                }
+                },
+                "transaction_data": [{
+                    "type": "payment",
+                    "credential_ids": ["pid"]
+                }]
             }
         }]
     })
@@ -996,7 +1035,7 @@ fn openid4vp_dcql_disabled_returns_empty() {
     };
     let wrapped = VpOverride {
         inner: &store,
-        config: vp_config.clone(),
+        config: vp_config,
     };
     let response = match_dc_api_request(&request, &wrapped, &MatcherOptions::default()).unwrap();
     assert!(response.results.is_empty());
@@ -1030,7 +1069,7 @@ fn openid4vp_response_mode_jwt_is_gated() {
     };
     let wrapped = VpOverride {
         inner: &store,
-        config: vp_config.clone(),
+        config: vp_config,
     };
     let response = match_dc_api_request(&request, &wrapped, &MatcherOptions::default()).unwrap();
     assert!(response.results.is_empty());
@@ -1069,7 +1108,7 @@ fn openid4vp_scope_based_dcql_is_gated() {
     };
     let wrapped = VpOverride {
         inner: &store,
-        config: vp_config.clone(),
+        config: vp_config,
     };
     let response = match_dc_api_request(&request, &wrapped, &MatcherOptions::default()).unwrap();
     assert!(response.results.is_empty());
@@ -1420,12 +1459,44 @@ fn matcher_options_can_disable_openid4vci_processing() {
     }
 
     impl<'a> MatcherStore for VciDisabled<'a> {
-        fn describe_credential<'b>(
+        fn credential_id<'b>(&'b self, cred: &Self::CredentialRef) -> &'b str {
+            self.inner.credential_id(cred)
+        }
+
+        fn credential_title<'b>(&'b self, cred: &Self::CredentialRef) -> &'b str {
+            self.inner.credential_title(cred)
+        }
+
+        fn credential_icon<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b [u8]> {
+            self.inner.credential_icon(cred)
+        }
+
+        fn credential_subtitle<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b str> {
+            self.inner.credential_subtitle(cred)
+        }
+
+        fn credential_disclaimer<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b str> {
+            self.inner.credential_disclaimer(cred)
+        }
+
+        fn credential_warning<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b str> {
+            self.inner.credential_warning(cred)
+        }
+
+        fn get_credential_field_label<'b>(
             &'b self,
             cred: &Self::CredentialRef,
-            context: &DcqlSelectionContext<'_>,
-        ) -> CredentialDescriptor<'b> {
-            self.inner.describe_credential(cred, context)
+            path: &ClaimsPathPointer,
+        ) -> Option<&'b str> {
+            self.inner.get_credential_field_label(cred, path)
+        }
+
+        fn get_credential_field_value<'b>(
+            &'b self,
+            cred: &Self::CredentialRef,
+            path: &ClaimsPathPointer,
+        ) -> Option<&'b str> {
+            self.inner.get_credential_field_value(cred, path)
         }
         fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
             self.inner.supports_protocol(cred, protocol)
@@ -1436,6 +1507,10 @@ fn matcher_options_can_disable_openid4vci_processing() {
                 ..dcapi_matcher::OpenId4VciConfig::default()
             }
         }
+
+        fn preferred_locales(&self) -> &[&str] {
+            self.inner.preferred_locales()
+        }
     }
 
     let options = MatcherOptions::default();
@@ -1443,7 +1518,6 @@ fn matcher_options_can_disable_openid4vci_processing() {
     let response = match_dc_api_request(&request, &wrapped, &options).unwrap();
     assert!(response.results.is_empty());
 }
-
 
 #[test]
 fn unknown_protocol_is_ignored() {
@@ -1482,10 +1556,9 @@ fn metadata_preserves_object_key_order() {
         panic!("expected set");
     };
     let metadata = entry_metadata(&set.slots[0].alternatives[0]).unwrap();
-    let pos_credential = metadata.find("\"credential_metadata\"").unwrap();
-    let pos_context = metadata.find("\"selection_context\"").unwrap();
-    let pos_dynamic = metadata.find("\"selection_metadata\"").unwrap();
-    assert!(pos_credential < pos_context && pos_context < pos_dynamic);
+    let pos_credential = metadata.find("\"credential_id\"").unwrap();
+    let pos_indices = metadata.find("\"transaction_data_indices\"").unwrap();
+    assert!(pos_credential < pos_indices);
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -71,7 +71,6 @@ pub struct Ts12PaymentSummary<'a> {
 pub(crate) struct Ts12Display<'a> {
     pub transaction_fields: Vec<Ts12DisplayField<'a>>,
     pub payment_summary: Option<Ts12PaymentSummary<'a>>,
-    pub metadata: Option<Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,18 +81,13 @@ pub(crate) struct Ts12DisplayField<'a> {
 
 #[derive(Debug, Clone)]
 struct Ts12RenderedField {
-    path: ClaimsPathPointer,
     label: String,
     value: String,
-    description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 struct Ts12TransactionDisplay {
-    index: usize,
-    data_type: TransactionDataType,
     locale: String,
-    ui_labels: Vec<(String, String)>,
     fields: Vec<Ts12RenderedField>,
 }
 
@@ -153,7 +147,6 @@ where
             preferred_locales,
             store,
             cred,
-            index: *idx,
         };
         let display = match render_transaction_display(&ctx) {
             Ok(display) => display,
@@ -190,18 +183,9 @@ where
         None
     };
 
-    let metadata = match build_ts12_metadata(&displays) {
-        Ok(value) => Some(value),
-        Err(err) => {
-            err.warn();
-            None
-        }
-    };
-
     Ok(Some(Ts12Display {
         transaction_fields,
         payment_summary,
-        metadata,
     }))
 }
 
@@ -213,7 +197,6 @@ struct RenderContext<'a, S: MatcherStore + ?Sized> {
     preferred_locales: &'a [&'a str],
     store: &'a S,
     cred: &'a S::CredentialRef,
-    index: usize,
 }
 
 fn render_transaction_display<S>(
@@ -261,7 +244,7 @@ where
         &ctx.metadata.ui_labels,
     )?;
 
-    let ui_labels = ui_labels_for_locale(
+    ui_labels_for_locale(
         ctx.credential_id,
         &ctx.metadata.data_type,
         &ctx.metadata.ui_labels,
@@ -290,18 +273,13 @@ where
             .format_ts12_value(ctx.cred, &path, &value, &locale)
             .unwrap_or_else(|| format_value(&value));
         fields.push(Ts12RenderedField {
-            path,
             label: display.label.clone(),
             value: formatted,
-            description: display.description.clone(),
         });
     }
 
     Ok(Ts12TransactionDisplay {
-        index: ctx.index,
-        data_type: ctx.transaction_data.data_type.clone(),
         locale,
-        ui_labels,
         fields,
     })
 }
@@ -588,54 +566,4 @@ fn ensure_local_schema_refs(
         _ => {}
     }
     Ok(())
-}
-
-fn build_ts12_metadata(displays: &[Ts12TransactionDisplay]) -> Result<Value, Ts12Error> {
-    let mut entries = Vec::new();
-    for display in displays {
-        let mut obj = serde_json::Map::new();
-        obj.insert(
-            "transaction_data_index".to_string(),
-            Value::from(display.index as u64),
-        );
-        obj.insert(
-            "type".to_string(),
-            Value::String(display.data_type.r#type.clone()),
-        );
-        if let Some(subtype) = &display.data_type.subtype {
-            obj.insert("subtype".to_string(), Value::String(subtype.clone()));
-        }
-        obj.insert("locale".to_string(), Value::String(display.locale.clone()));
-
-        let mut labels = serde_json::Map::new();
-        for (key, value) in &display.ui_labels {
-            labels.insert(key.clone(), Value::String(value.clone()));
-        }
-        obj.insert("ui_labels".to_string(), Value::Object(labels));
-
-        let mut fields = Vec::new();
-        for field in &display.fields {
-            let mut field_obj = serde_json::Map::new();
-            let path_value = serde_json::to_value(&field.path).map_err(|err| {
-                Ts12Error::MetadataSerialization {
-                    index: display.index,
-                    source: err,
-                }
-            })?;
-            field_obj.insert("path".to_string(), path_value);
-            field_obj.insert("label".to_string(), Value::String(field.label.clone()));
-            field_obj.insert("value".to_string(), Value::String(field.value.clone()));
-            if let Some(description) = &field.description {
-                field_obj.insert("description".to_string(), Value::String(description.clone()));
-            }
-            fields.push(Value::Object(field_obj));
-        }
-        obj.insert("fields".to_string(), Value::Array(fields));
-
-        entries.push(Value::Object(obj));
-    }
-
-    let mut display_obj = serde_json::Map::new();
-    display_obj.insert("entries".to_string(), Value::Array(entries));
-    Ok(Value::Object(display_obj))
 }

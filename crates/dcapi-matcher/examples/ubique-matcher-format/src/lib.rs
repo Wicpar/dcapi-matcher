@@ -3,12 +3,11 @@ use dcapi_dcql::{
     ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, TransactionData, ValueMatch,
 };
 use dcapi_matcher::{
-    CredentialDescriptor, DcqlSelectionContext, MatcherOptions, MatcherStore, PROTOCOL_OPENID4VP,
-    PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
-    PROTOCOL_OPENID4VP_V1_UNSIGNED, dcapi_matcher, match_dc_api_request,
+    MatcherOptions, MatcherStore, PROTOCOL_OPENID4VP, PROTOCOL_OPENID4VP_V1_MULTISIGNED,
+    PROTOCOL_OPENID4VP_V1_SIGNED, PROTOCOL_OPENID4VP_V1_UNSIGNED, dcapi_matcher,
+    match_dc_api_request,
 };
 use serde_json::Value;
-use std::borrow::Cow;
 use std::io::Read;
 
 /// Credential package parser compatible with Ubique's matcher format.
@@ -91,7 +90,9 @@ impl CredentialStore for UbiqueCredentialPackage {
 
     fn has_claim_path(&self, cred: &Self::CredentialRef, path: &ClaimsPathPointer) -> bool {
         let claims = self.credential(*cred).get("paths").unwrap_or(&Value::Null);
-        dcapi_dcql::select_nodes(claims, path).is_ok()
+        dcapi_dcql::select_nodes(claims, path)
+            .map(|nodes| !nodes.is_empty())
+            .unwrap_or(false)
     }
 
     fn match_claim_value(
@@ -118,23 +119,24 @@ impl CredentialStore for UbiqueCredentialPackage {
 }
 
 impl MatcherStore for UbiqueCredentialPackage {
-    fn describe_credential<'a>(
-        &'a self,
-        cred: &Self::CredentialRef,
-        _context: &DcqlSelectionContext<'_>,
-    ) -> CredentialDescriptor<'a> {
-        let credential = self.credential(*cred);
-        let id = credential.get("id").map(value_to_id).unwrap_or_default();
-        let title = credential
+    fn credential_id<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str {
+        self.credential(*cred)
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+    }
+
+    fn credential_title<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str {
+        self.credential(*cred)
             .get("title")
             .and_then(Value::as_str)
-            .unwrap_or_default();
-        let mut descriptor = CredentialDescriptor::new(id, title);
-        descriptor.subtitle = credential
+            .unwrap_or("")
+    }
+
+    fn credential_subtitle<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a str> {
+        self.credential(*cred)
             .get("subtitle")
             .and_then(Value::as_str)
-            .map(Cow::Borrowed);
-        descriptor
     }
 
     fn supports_protocol(&self, _cred: &Self::CredentialRef, protocol: &str) -> bool {
@@ -147,33 +149,9 @@ impl MatcherStore for UbiqueCredentialPackage {
         )
     }
 
-    fn metadata_for_credman(
-        &self,
-        cred: &Self::CredentialRef,
-        context: &DcqlSelectionContext<'_>,
-    ) -> Option<Value> {
-        let mut metadata = serde_json::Map::new();
-        metadata.insert(
-            "credential_id".to_string(),
-            Value::String(value_to_id(
-                self.credential(*cred).get("id").unwrap_or(&Value::Null),
-            )),
-        );
-        metadata.insert(
-            "protocol".to_string(),
-            Value::String(context.protocol().to_string()),
-        );
-        Some(Value::Object(metadata))
-    }
-
-}
-
-fn value_to_id(value: &Value) -> String {
-    match value {
-        Value::String(v) => v.clone(),
-        Value::Number(v) => v.to_string(),
-        Value::Bool(v) => v.to_string(),
-        _ => String::new(),
+    fn preferred_locales(&self) -> &[&str] {
+        static LOCALES: [&str; 1] = ["en"];
+        &LOCALES
     }
 }
 
@@ -182,18 +160,14 @@ fn value_to_id(value: &Value) -> String {
 pub fn matcher_entrypoint(request: String, mut credentials: CredentialReader) {
     let mut raw = Vec::new();
     if let Err(err) = credentials.read_to_end(&mut raw) {
-        dcapi_matcher::diagnostics::error(format!(
-            "credential package read error: {err}"
-        ));
+        dcapi_matcher::diagnostics::error(format!("credential package read error: {err}"));
         return;
     }
 
     let package = match UbiqueCredentialPackage::parse(raw.as_slice()) {
         Ok(package) => package,
         Err(err) => {
-            dcapi_matcher::diagnostics::error(format!(
-                "credential package parse error: {err}"
-            ));
+            dcapi_matcher::diagnostics::error(format!("credential package parse error: {err}"));
             return;
         }
     };
@@ -229,18 +203,7 @@ mod tests {
             package.list_credentials(Some("dc+sd-jwt")),
             Vec::<usize>::new()
         );
-        let context = DcqlSelectionContext {
-            request_index: 0,
-            alternative_index: 0,
-            query_id: "test",
-            selected_claims: &[],
-            transaction_data: &[],
-            transaction_data_indices: &[],
-        };
-        assert_eq!(
-            package.describe_credential(&0, &context).credential_id.as_ref(),
-            "113"
-        );
+        assert_eq!(package.credential_id(&0), "113");
 
         let path = vec![
             PathElement::String("org.iso.18013.5.1".to_string()),

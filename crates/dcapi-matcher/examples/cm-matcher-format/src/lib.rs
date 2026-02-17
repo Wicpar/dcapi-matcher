@@ -1,12 +1,12 @@
 use android_credman::{CredentialReader, CredmanApplyExt};
-use dcapi_dcql::{ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, ValueMatch};
+use dcapi_dcql::{
+    ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, PathElement, ValueMatch,
+};
 use dcapi_matcher::{
-    CredentialDescriptor, CredentialDescriptorField, DcqlSelectionContext, MatcherOptions,
-    MatcherStore, OpenId4VpConfig, PROTOCOL_OPENID4VP_V1_SIGNED,
+    MatcherOptions, MatcherStore, OpenId4VpConfig, PROTOCOL_OPENID4VP_V1_SIGNED,
     PROTOCOL_OPENID4VP_V1_UNSIGNED, dcapi_matcher, match_dc_api_request,
 };
 use serde_json::{Map, Value};
-use std::borrow::Cow;
 use std::io::Read;
 
 /// Parsed CMWallet credential package.
@@ -59,7 +59,9 @@ impl CredentialStore for CmCredentialPackage {
     }
 
     fn has_claim_path(&self, cred: &Self::CredentialRef, path: &ClaimsPathPointer) -> bool {
-        dcapi_dcql::select_nodes(&self.credentials[*cred].claims, path).is_ok()
+        dcapi_dcql::select_nodes(&self.credentials[*cred].claims, path)
+            .map(|nodes| !nodes.is_empty())
+            .unwrap_or(false)
     }
 
     fn match_claim_value(
@@ -85,24 +87,52 @@ impl CredentialStore for CmCredentialPackage {
 }
 
 impl MatcherStore for CmCredentialPackage {
-    fn describe_credential<'a>(
+    fn credential_id<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str {
+        let credential = &self.credentials[*cred];
+        credential.id.as_str()
+    }
+
+    fn credential_title<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str {
+        self.credentials[*cred].title.as_str()
+    }
+
+    fn credential_icon<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a [u8]> {
+        self.credentials[*cred].icon.as_deref()
+    }
+
+    fn credential_subtitle<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a str> {
+        self.credentials[*cred].subtitle.as_deref()
+    }
+
+    fn credential_disclaimer<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a str> {
+        self.credentials[*cred].disclaimer.as_deref()
+    }
+
+    fn get_credential_field_label<'a>(
         &'a self,
         cred: &Self::CredentialRef,
-        _context: &DcqlSelectionContext<'_>,
-    ) -> CredentialDescriptor<'a> {
-        let credential = &self.credentials[*cred];
-        let mut descriptor =
-            CredentialDescriptor::new(credential.id.as_str(), credential.title.as_str());
-        descriptor.subtitle = credential.subtitle.as_deref().map(Cow::Borrowed);
-        descriptor.disclaimer = credential.disclaimer.as_deref().map(Cow::Borrowed);
-        descriptor.icon = credential.icon.as_deref().map(Cow::Borrowed);
-        if let Some(display_name) = &credential.shared_attribute_display_name {
-            descriptor.fields.push(CredentialDescriptorField {
-                display_name: display_name.as_str().into(),
-                display_value: None,
-            });
+        path: &ClaimsPathPointer,
+    ) -> Option<&'a str> {
+        if path.iter().any(|segment| matches!(segment, PathElement::Wildcard)) {
+            return None;
         }
-        descriptor
+        self.credentials[*cred]
+            .shared_attribute_display_name
+            .as_deref()
+    }
+
+    fn get_credential_field_value<'a>(
+        &'a self,
+        cred: &Self::CredentialRef,
+        path: &ClaimsPathPointer,
+    ) -> Option<&'a str> {
+        if path.iter().any(|segment| matches!(segment, PathElement::Wildcard)) {
+            return None;
+        }
+        let Ok(nodes) = dcapi_dcql::select_nodes(&self.credentials[*cred].claims, path) else {
+            return None;
+        };
+        nodes.first().and_then(|value| value.as_str())
     }
 
     fn supports_protocol(&self, _cred: &Self::CredentialRef, protocol: &str) -> bool {
@@ -121,6 +151,11 @@ impl MatcherStore for CmCredentialPackage {
             allow_signed_requests: true,
             allow_response_mode_jwt: false,
         }
+    }
+
+    fn preferred_locales(&self) -> &[&str] {
+        static LOCALES: [&str; 1] = ["en"];
+        &LOCALES
     }
 }
 
@@ -197,7 +232,8 @@ fn parse_credential_entry(
 }
 
 fn parse_string_vec(value: Option<&Value>) -> Option<Vec<String>> {
-    let values: Vec<String> = value.and_then(Value::as_array)?
+    let values: Vec<String> = value
+        .and_then(Value::as_array)?
         .iter()
         .filter_map(Value::as_str)
         .map(ToOwned::to_owned)
@@ -267,18 +303,14 @@ fn normalize_claim_value(value: &Value) -> Value {
 pub fn matcher_entrypoint(request: String, mut credentials: CredentialReader) {
     let mut blob = Vec::new();
     if let Err(err) = credentials.read_to_end(&mut blob) {
-        dcapi_matcher::diagnostics::error(format!(
-            "credential package read error: {err}"
-        ));
+        dcapi_matcher::diagnostics::error(format!("credential package read error: {err}"));
         return;
     }
 
     let package = match parse_cmwallet_blob(blob.as_slice()) {
         Ok(package) => package,
         Err(err) => {
-            dcapi_matcher::diagnostics::error(format!(
-                "credential package parse error: {err}"
-            ));
+            dcapi_matcher::diagnostics::error(format!("credential package parse error: {err}"));
             return;
         }
     };
@@ -345,21 +377,21 @@ mod tests {
             package.match_claim_value(&0, &path, &[ClaimValue::String("+16502154321".to_string())]);
         assert!(matches!(matched, ValueMatch::Match));
 
-        let context = DcqlSelectionContext {
-            request_index: 0,
-            alternative_index: 0,
-            query_id: "test",
-            selected_claims: &[],
-            transaction_data: &[],
-            transaction_data_indices: &[],
-        };
-        let descriptor = package.describe_credential(&0, &context);
-        assert_eq!(descriptor.title.as_ref(), "Terrific Telecom");
-        assert_eq!(descriptor.subtitle.as_deref(), Some("+1 (650) 215-4321"));
-        assert_eq!(descriptor.disclaimer.as_deref(), Some("Consent text"));
-        assert_eq!(descriptor.icon.as_deref(), Some(icon.as_slice()));
-        assert_eq!(descriptor.fields.len(), 1);
-        assert_eq!(descriptor.fields[0].display_name.as_ref(), "Phone number");
+        assert_eq!(package.credential_title(&0), "Terrific Telecom");
+        assert_eq!(
+            package.credential_subtitle(&0),
+            Some("+1 (650) 215-4321")
+        );
+        assert_eq!(package.credential_disclaimer(&0), Some("Consent text"));
+        assert_eq!(package.credential_icon(&0), Some(icon.as_slice()));
+        assert_eq!(
+            package.get_credential_field_label(&0, &path),
+            Some("Phone number")
+        );
+        assert_eq!(
+            package.get_credential_field_value(&0, &path),
+            Some("+16502154321")
+        );
     }
 
     #[test]
