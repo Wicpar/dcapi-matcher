@@ -1,20 +1,20 @@
 use android_credman::test_shim::{self, DisplayEvent};
+use android_credman::CredmanApplyExt;
 use base64::Engine;
 use dcapi_dcql::{
     ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, PathElement,
     TransactionDataType, ValueMatch,
 };
 use dcapi_matcher::{
-    CredentialDescriptor, CredentialDescriptorField, CredentialSelectionContext,
-    MatcherError, MatcherOptions, MatcherStore, PROTOCOL_OPENID4VCI,
+    CredentialDescriptor, CredentialDescriptorField, CredentialEntry, DcqlSelectionContext, Field,
+    MatcherError, MatcherOptions, MatcherResult, MatcherStore, PROTOCOL_OPENID4VCI,
     PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
-    PROTOCOL_OPENID4VP_V1_UNSIGNED, ResolvedMatcherResult, Ts12ClaimMetadata, Ts12LocalizedLabel,
-    Ts12LocalizedValue, Ts12PaymentSummary, Ts12TransactionMetadata, decode_cbor_package,
-    decode_json_package,
-    match_dc_api_request,
+    PROTOCOL_OPENID4VP_V1_UNSIGNED, Ts12ClaimMetadata, Ts12LocalizedLabel, Ts12LocalizedValue,
+    Ts12PaymentSummary, Ts12TransactionMetadata, decode_json_package, match_dc_api_request,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 const TS12_TYPE_PAYMENT: &str = "urn:eudi:sca:payment:1";
@@ -127,14 +127,18 @@ impl CredentialStore for TestStore {
 }
 
 impl MatcherStore for TestStore {
-    fn describe_credential(&self, cred: &Self::CredentialRef) -> CredentialDescriptor {
+    fn describe_credential<'a>(
+        &'a self,
+        cred: &Self::CredentialRef,
+        _context: &DcqlSelectionContext<'_>,
+    ) -> CredentialDescriptor<'a> {
         let credential = self.get(*cred);
         let mut descriptor =
-            CredentialDescriptor::new(credential.id.clone(), credential.title.clone());
-        descriptor.subtitle = Some(format!("subtitle-{}", credential.id));
+            CredentialDescriptor::new(credential.id.as_str(), credential.title.as_str());
+        descriptor.subtitle = Some(Cow::Owned(format!("subtitle-{}", credential.id)));
         descriptor.fields.push(CredentialDescriptorField {
-            display_name: "name".to_string(),
-            display_value: credential.title.clone(),
+            display_name: "name".into(),
+            display_value: credential.title.as_str().into(),
         });
         descriptor.metadata = credential.credential_metadata.clone();
         descriptor
@@ -147,7 +151,7 @@ impl MatcherStore for TestStore {
     fn metadata_for_credman(
         &self,
         cred: &Self::CredentialRef,
-        context: &CredentialSelectionContext<'_>,
+        context: &DcqlSelectionContext<'_>,
     ) -> Option<Value> {
         let mut obj = serde_json::Map::new();
         obj.insert(
@@ -173,14 +177,14 @@ impl MatcherStore for TestStore {
             .cloned()
     }
 
-    fn ts12_payment_summary(
-        &self,
+    fn ts12_payment_summary<'a>(
+        &'a self,
         _cred: &Self::CredentialRef,
         transaction_data: &dcapi_dcql::TransactionData,
         payload: &Value,
         _metadata: &Ts12TransactionMetadata,
         _locale: &str,
-    ) -> Option<Ts12PaymentSummary> {
+    ) -> Option<Ts12PaymentSummary<'a>> {
         if transaction_data.data_type.r#type != TS12_TYPE_PAYMENT {
             return None;
         }
@@ -199,8 +203,8 @@ impl MatcherStore for TestStore {
             format!("{amount} {currency}")
         };
         Some(Ts12PaymentSummary {
-            merchant_name,
-            transaction_amount,
+            merchant_name: Cow::Owned(merchant_name),
+            transaction_amount: Cow::Owned(transaction_amount),
             additional_info: None,
         })
     }
@@ -497,7 +501,11 @@ impl CredentialStore for VciStore {
 }
 
 impl MatcherStore for VciStore {
-    fn describe_credential(&self, _cred: &Self::CredentialRef) -> CredentialDescriptor {
+    fn describe_credential<'a>(
+        &'a self,
+        _cred: &Self::CredentialRef,
+        _context: &DcqlSelectionContext<'_>,
+    ) -> CredentialDescriptor<'a> {
         CredentialDescriptor::new("unused", "unused")
     }
 
@@ -565,8 +573,12 @@ impl<'a> CredentialStore for VpOverride<'a> {
 }
 
 impl<'a> MatcherStore for VpOverride<'a> {
-    fn describe_credential(&self, cred: &Self::CredentialRef) -> CredentialDescriptor {
-        self.inner.describe_credential(cred)
+    fn describe_credential<'b>(
+        &'b self,
+        cred: &Self::CredentialRef,
+        context: &DcqlSelectionContext<'_>,
+    ) -> CredentialDescriptor<'b> {
+        self.inner.describe_credential(cred, context)
     }
 
     fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
@@ -582,14 +594,48 @@ impl<'a> MatcherStore for VpOverride<'a> {
     }
 }
 
-fn collect_set_configs(response: &dcapi_matcher::ResolvedMatcherResponse) -> Vec<Vec<String>> {
+fn entry_metadata<'a>(entry: &'a CredentialEntry<'a>) -> Option<&'a str> {
+    match entry {
+        CredentialEntry::StringId(entry) => entry.metadata.as_deref(),
+        CredentialEntry::Payment(entry) => entry.metadata.as_deref(),
+    }
+}
+
+fn entry_cred_id<'a>(entry: &'a CredentialEntry<'a>) -> &'a str {
+    match entry {
+        CredentialEntry::StringId(entry) => entry.cred_id.as_ref(),
+        CredentialEntry::Payment(entry) => entry.cred_id.as_ref(),
+    }
+}
+
+fn entry_fields<'a>(entry: &'a CredentialEntry<'a>) -> &'a [Field<'a>] {
+    match entry {
+        CredentialEntry::StringId(entry) => entry.fields.as_slice(),
+        CredentialEntry::Payment(entry) => entry.fields.as_slice(),
+    }
+}
+
+fn query_id_from_metadata(metadata: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(metadata).ok()?;
+    value
+        .get("selection_context")
+        .and_then(|context| context.get("credential_query_id"))
+        .and_then(Value::as_str)
+        .map(|id| id.to_string())
+}
+
+fn collect_set_configs(response: &dcapi_matcher::MatcherResponse) -> Vec<Vec<String>> {
     let mut out = Vec::new();
     for result in &response.results {
-        if let ResolvedMatcherResult::Set(set) = result {
+        if let MatcherResult::Group(set) = result {
             let mut ids = set
                 .slots
                 .iter()
-                .filter_map(|slot| slot.id.clone())
+                .filter_map(|slot| {
+                    let entry = slot.alternatives.first()?;
+                    let metadata = entry_metadata(entry)?;
+                    query_id_from_metadata(metadata)
+                })
                 .collect::<Vec<_>>();
             ids.sort();
             out.push(ids);
@@ -680,11 +726,11 @@ fn openid4vp_transaction_data_encoded_is_decoded_and_attached() {
     .to_string();
 
     let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
-    let ResolvedMatcherResult::Set(set) = &response.results[0] else {
+    let MatcherResult::Group(set) = &response.results[0] else {
         panic!("expected set");
     };
     let first = &set.slots[0].alternatives[0];
-    let metadata = first.metadata_json.as_ref().unwrap();
+    let metadata = entry_metadata(first).unwrap();
     assert!(metadata.contains("\"credential_query_id\":\"pid\""));
     assert!(metadata.contains("\"transaction_data\""));
 }
@@ -717,12 +763,12 @@ fn openid4vp_ts12_payment_renders_payment_entry_with_fields() {
     .to_string();
 
     let response = match_dc_api_request(&request, &store, &ts12_options()).unwrap();
-    let ResolvedMatcherResult::Set(set) = &response.results[0] else {
+    let MatcherResult::Group(set) = &response.results[0] else {
         panic!("expected set");
     };
     let first = &set.slots[0].alternatives[0];
-    assert!(first.payment.is_some());
-    assert!(!first.transaction_fields.is_empty());
+    assert!(matches!(first, CredentialEntry::Payment(_)));
+    assert!(!entry_fields(first).is_empty());
 
     let _ = test_shim::take_display();
     response.apply();
@@ -808,12 +854,12 @@ fn openid4vp_ts12_generic_renders_transaction_fields() {
     .to_string();
 
     let response = match_dc_api_request(&request, &store, &ts12_options()).unwrap();
-    let ResolvedMatcherResult::Set(set) = &response.results[0] else {
+    let MatcherResult::Group(set) = &response.results[0] else {
         panic!("expected set");
     };
     let first = &set.slots[0].alternatives[0];
-    assert!(first.payment.is_none());
-    assert!(!first.transaction_fields.is_empty());
+    assert!(matches!(first, CredentialEntry::StringId(_)));
+    assert!(!entry_fields(first).is_empty());
 }
 
 #[test]
@@ -1054,11 +1100,11 @@ fn openid4vci_direct_offer_object_is_supported() {
     .to_string();
 
     let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
-    let ResolvedMatcherResult::Set(set) = &response.results[0] else {
+    let MatcherResult::Group(set) = &response.results[0] else {
         panic!("expected set");
     };
     assert_eq!(set.slots.len(), 1);
-    assert_eq!(set.slots[0].alternatives[0].credential_id, "pid_config");
+    assert_eq!(entry_cred_id(&set.slots[0].alternatives[0]), "pid_config");
 }
 
 #[test]
@@ -1086,10 +1132,10 @@ fn openid4vci_offer_wrapper_and_metadata_configuration_are_supported() {
     .to_string();
 
     let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
-    let ResolvedMatcherResult::Set(set) = &response.results[0] else {
+    let MatcherResult::Group(set) = &response.results[0] else {
         panic!("expected set");
     };
-    assert_eq!(set.slots[0].alternatives[0].credential_id, "pid_config");
+    assert_eq!(entry_cred_id(&set.slots[0].alternatives[0]), "pid_config");
 }
 
 #[test]
@@ -1170,13 +1216,13 @@ fn openid4vci_configuration_order_is_preserved_in_slots() {
     .to_string();
 
     let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
-    let ResolvedMatcherResult::Set(set) = &response.results[0] else {
+    let MatcherResult::Group(set) = &response.results[0] else {
         panic!("expected set");
     };
     assert_eq!(
         set.slots
             .iter()
-            .map(|slot| slot.id.clone().unwrap())
+            .map(|slot| entry_cred_id(&slot.alternatives[0]).to_string())
             .collect::<Vec<_>>(),
         vec!["mdl_config".to_string(), "pid_config".to_string()]
     );
@@ -1374,8 +1420,12 @@ fn matcher_options_can_disable_openid4vci_processing() {
     }
 
     impl<'a> MatcherStore for VciDisabled<'a> {
-        fn describe_credential(&self, cred: &Self::CredentialRef) -> CredentialDescriptor {
-            self.inner.describe_credential(cred)
+        fn describe_credential<'b>(
+            &'b self,
+            cred: &Self::CredentialRef,
+            context: &DcqlSelectionContext<'_>,
+        ) -> CredentialDescriptor<'b> {
+            self.inner.describe_credential(cred, context)
         }
         fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
             self.inner.supports_protocol(cred, protocol)
@@ -1428,10 +1478,10 @@ fn metadata_preserves_object_key_order() {
     .to_string();
 
     let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
-    let ResolvedMatcherResult::Set(set) = &response.results[0] else {
+    let MatcherResult::Group(set) = &response.results[0] else {
         panic!("expected set");
     };
-    let metadata = set.slots[0].alternatives[0].metadata_json.as_ref().unwrap();
+    let metadata = entry_metadata(&set.slots[0].alternatives[0]).unwrap();
     let pos_credential = metadata.find("\"credential_metadata\"").unwrap();
     let pos_context = metadata.find("\"selection_context\"").unwrap();
     let pos_dynamic = metadata.find("\"selection_metadata\"").unwrap();
@@ -1445,16 +1495,11 @@ struct DemoPackage {
 }
 
 #[test]
-fn decode_helpers_support_cbor_and_json_packages() {
+fn decode_helpers_support_json_packages() {
     let package = DemoPackage {
         version: 1,
         name: "cm-package".to_string(),
     };
-    let mut cbor = Vec::new();
-    ciborium::into_writer(&package, &mut cbor).unwrap();
-    let decoded_cbor: DemoPackage = decode_cbor_package(&cbor).unwrap();
-    assert_eq!(decoded_cbor, package);
-
     let json_bytes = serde_json::to_vec(&package).unwrap();
     let decoded_json: DemoPackage = decode_json_package(&json_bytes).unwrap();
     assert_eq!(decoded_json, package);

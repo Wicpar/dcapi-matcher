@@ -12,4 +12,3 @@ android-credman = { workspace = true, features = ["test-shim"] }
 dcapi-dcql = { workspace = true }
 dcapi-matcher = { workspace = true }
 serde_json = { workspace = true }
-tracing = { version = "0.1", default-features = false }

@@ -1,11 +1,12 @@
-use android_credman::CredentialReader;
+use android_credman::{CredentialReader, CredmanApplyExt};
 use dcapi_dcql::{ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, ValueMatch};
 use dcapi_matcher::{
-    CredentialDescriptor, CredentialDescriptorField, MatcherOptions, MatcherStore, OpenId4VpConfig,
-    PROTOCOL_OPENID4VP_V1_SIGNED, PROTOCOL_OPENID4VP_V1_UNSIGNED, dcapi_matcher,
-    match_dc_api_request,
+    CredentialDescriptor, CredentialDescriptorField, DcqlSelectionContext, MatcherOptions,
+    MatcherStore, OpenId4VpConfig, PROTOCOL_OPENID4VP_V1_SIGNED,
+    PROTOCOL_OPENID4VP_V1_UNSIGNED, dcapi_matcher, match_dc_api_request,
 };
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::io::Read;
 
 /// Parsed CMWallet credential package.
@@ -84,17 +85,21 @@ impl CredentialStore for CmCredentialPackage {
 }
 
 impl MatcherStore for CmCredentialPackage {
-    fn describe_credential(&self, cred: &Self::CredentialRef) -> CredentialDescriptor {
+    fn describe_credential<'a>(
+        &'a self,
+        cred: &Self::CredentialRef,
+        _context: &DcqlSelectionContext<'_>,
+    ) -> CredentialDescriptor<'a> {
         let credential = &self.credentials[*cred];
         let mut descriptor =
-            CredentialDescriptor::new(credential.id.clone(), credential.title.clone());
-        descriptor.subtitle = credential.subtitle.clone();
-        descriptor.disclaimer = credential.disclaimer.clone();
-        descriptor.icon = credential.icon.clone();
+            CredentialDescriptor::new(credential.id.as_str(), credential.title.as_str());
+        descriptor.subtitle = credential.subtitle.as_deref().map(Cow::Borrowed);
+        descriptor.disclaimer = credential.disclaimer.as_deref().map(Cow::Borrowed);
+        descriptor.icon = credential.icon.as_deref().map(Cow::Borrowed);
         if let Some(display_name) = &credential.shared_attribute_display_name {
             descriptor.fields.push(CredentialDescriptorField {
-                display_name: display_name.clone(),
-                display_value: String::new(),
+                display_name: display_name.as_str().into(),
+                display_value: None,
             });
         }
         descriptor
@@ -261,12 +266,21 @@ fn normalize_claim_value(value: &Value) -> Value {
 #[dcapi_matcher]
 pub fn matcher_entrypoint(request: String, mut credentials: CredentialReader) {
     let mut blob = Vec::new();
-    if credentials.read_to_end(&mut blob).is_err() {
+    if let Err(err) = credentials.read_to_end(&mut blob) {
+        dcapi_matcher::diagnostics::error(format!(
+            "credential package read error: {err}"
+        ));
         return;
     }
 
-    let Ok(package) = parse_cmwallet_blob(blob.as_slice()) else {
-        return;
+    let package = match parse_cmwallet_blob(blob.as_slice()) {
+        Ok(package) => package,
+        Err(err) => {
+            dcapi_matcher::diagnostics::error(format!(
+                "credential package parse error: {err}"
+            ));
+            return;
+        }
     };
 
     let Ok(response) = match_dc_api_request(&request, &package, &MatcherOptions::default()) else {
@@ -331,13 +345,21 @@ mod tests {
             package.match_claim_value(&0, &path, &[ClaimValue::String("+16502154321".to_string())]);
         assert!(matches!(matched, ValueMatch::Match));
 
-        let descriptor = package.describe_credential(&0);
-        assert_eq!(descriptor.title, "Terrific Telecom");
+        let context = DcqlSelectionContext {
+            request_index: 0,
+            alternative_index: 0,
+            query_id: "test",
+            selected_claims: &[],
+            transaction_data: &[],
+            transaction_data_indices: &[],
+        };
+        let descriptor = package.describe_credential(&0, &context);
+        assert_eq!(descriptor.title.as_ref(), "Terrific Telecom");
         assert_eq!(descriptor.subtitle.as_deref(), Some("+1 (650) 215-4321"));
         assert_eq!(descriptor.disclaimer.as_deref(), Some("Consent text"));
         assert_eq!(descriptor.icon.as_deref(), Some(icon.as_slice()));
         assert_eq!(descriptor.fields.len(), 1);
-        assert_eq!(descriptor.fields[0].display_name, "Phone number");
+        assert_eq!(descriptor.fields[0].display_name.as_ref(), "Phone number");
     }
 
     #[test]

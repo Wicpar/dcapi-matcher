@@ -159,7 +159,7 @@ for (outer_idx, alternative) in plan.alternatives.iter().enumerate() {
 - Duplicate claim paths are ignored (first occurrence wins).
 - `transaction_data` is passed separately from `DcqlQuery` and requires at least one
   referenced credential id in each entry.
-- `transaction_data` must be non-empty when present.
+- `transaction_data` may be empty; an empty array is ignored.
 - Transaction data compatibility semantics are delegated to `CredentialStore::can_sign_transaction_data`.
 - Output alternatives make transaction-data assignment explicit (`transaction_data[i] -> credential_id`)
   and pre-filter candidate credentials so entry choices remain independent inside one alternative.

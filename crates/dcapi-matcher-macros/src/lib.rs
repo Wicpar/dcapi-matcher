@@ -11,28 +11,13 @@ pub fn dcapi_matcher(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let expanded = quote! {
         #input_fn
 
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn android_credman_matcher_match() {
-            ::dcapi_matcher::tracing_backend::set_global_default();
-            ::dcapi_matcher::tracing_backend::begin();
-            ::dcapi_matcher::tracing_backend::set_level(None);
-            let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
-                #fn_name(
-                    ::android_credman::FromRequest::from_request(),
-                    ::android_credman::FromCredentials::from_credentials(),
-                );
-            }));
-            if let Err(payload) = &result {
-                let detail = if let Some(msg) = payload.downcast_ref::<&'static str>() {
-                    (*msg).to_string()
-                } else if let Some(msg) = payload.downcast_ref::<String>() {
-                    msg.clone()
-                } else {
-                    "non-string panic payload".to_string()
-                };
-                ::tracing::error!(detail = %detail, "matcher panicked");
-            }
-            ::dcapi_matcher::tracing_backend::flush_and_apply();
+        pub fn main() {
+            ::dcapi_matcher::diagnostics::begin();
+            #fn_name(
+                ::android_credman::FromRequest::from_request(),
+                ::android_credman::FromCredentials::from_credentials(),
+            );
+            ::dcapi_matcher::diagnostics::flush_and_apply();
         }
     };
 

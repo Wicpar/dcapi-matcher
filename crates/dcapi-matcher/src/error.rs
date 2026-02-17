@@ -1,5 +1,6 @@
 use dcapi_dcql::{ClaimsPathPointer, TransactionDataType};
 use alloc::string::String;
+use core::error::Error as CoreError;
 use thiserror::Error;
 
 /// TS12-specific request/configuration warnings.
@@ -51,22 +52,22 @@ pub enum Ts12MetadataError {
         reference: String,
     },
     /// Schema compilation failed.
-    #[error("credential {credential_id} ts12 metadata for {data_type:?} invalid schema: {source}")]
+    #[error(
+        "credential {credential_id} ts12 metadata for {data_type:?} invalid schema: {error:?}"
+    )]
     SchemaInvalid {
         credential_id: String,
         data_type: TransactionDataType,
-        #[source]
-        source: jsonschema::ValidationError<'static>,
+        error: Box<json_schema_validator_core::ValidationError>,
     },
     /// Payload failed schema validation.
     #[error(
-        "credential {credential_id} ts12 metadata for {data_type:?} payload does not match schema: {source}"
+        "credential {credential_id} ts12 metadata for {data_type:?} payload does not match schema: {errors:?}"
     )]
     SchemaValidation {
         credential_id: String,
         data_type: TransactionDataType,
-        #[source]
-        source: jsonschema::ValidationError<'static>,
+        errors: Vec<json_schema_validator_core::ValidationError>,
     },
     /// Missing claim metadata for a payload path.
     #[error(
@@ -153,14 +154,6 @@ pub enum TransactionDataDecodeError {
     HolderBindingRequired { index: usize, credential_id: String },
 }
 
-/// Credential package validation error (credential-level warnings).
-#[derive(Debug, Error)]
-pub enum CredentialValidationError {
-    /// Credential package is invalid.
-    #[error("credential {credential_id} invalid: {reason}")]
-    Invalid { credential_id: String, reason: String },
-}
-
 /// Request data decoding error.
 #[derive(Debug, Error)]
 pub enum RequestDataError {
@@ -194,6 +187,12 @@ pub enum OpenId4VpError {
     /// DCQL via `scope` is not supported.
     #[error("dcql query via scope is not supported")]
     DcqlScopeUnsupported,
+    /// Transaction data cannot be satisfied by the DCQL query.
+    #[error("transaction_data[{index}] has no matching credential in dcql_query: {credential_ids:?}")]
+    TransactionDataUnsatisfied {
+        index: usize,
+        credential_ids: Vec<String>,
+    },
 }
 
 /// OpenID4VCI request errors.
@@ -228,12 +227,6 @@ pub enum OpenId4VciError {
 /// Credential package decoding errors.
 #[derive(Debug, Error)]
 pub enum CredentialPackageError {
-    /// CBOR decoding failed.
-    #[error("credential package CBOR decode failed")]
-    CborDecode {
-        #[source]
-        source: ciborium::de::Error<ciborium_io::EndOfFile>,
-    },
     /// JSON decoding failed.
     #[error("credential package JSON decode failed")]
     JsonDecode {
@@ -279,4 +272,16 @@ pub enum MatcherError {
         #[source]
         source: serde_json::Error,
     },
+}
+
+/// Format an error and all of its sources into a single string.
+pub fn format_error_chain(err: &dyn CoreError) -> String {
+    let mut out = err.to_string();
+    let mut current = err.source();
+    while let Some(source) = current {
+        out.push_str(": ");
+        out.push_str(&source.to_string());
+        current = source.source();
+    }
+    out
 }

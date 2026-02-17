@@ -1,13 +1,14 @@
-use android_credman::CredentialReader;
+use android_credman::{CredentialReader, CredmanApplyExt};
 use dcapi_dcql::{
     ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, TransactionData, ValueMatch,
 };
 use dcapi_matcher::{
-    CredentialDescriptor, CredentialSelectionContext, MatcherOptions, MatcherStore,
-    PROTOCOL_OPENID4VP, PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
+    CredentialDescriptor, DcqlSelectionContext, MatcherOptions, MatcherStore, PROTOCOL_OPENID4VP,
+    PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
     PROTOCOL_OPENID4VP_V1_UNSIGNED, dcapi_matcher, match_dc_api_request,
 };
 use serde_json::Value;
+use std::borrow::Cow;
 use std::io::Read;
 
 /// Credential package parser compatible with Ubique's matcher format.
@@ -117,7 +118,11 @@ impl CredentialStore for UbiqueCredentialPackage {
 }
 
 impl MatcherStore for UbiqueCredentialPackage {
-    fn describe_credential(&self, cred: &Self::CredentialRef) -> CredentialDescriptor {
+    fn describe_credential<'a>(
+        &'a self,
+        cred: &Self::CredentialRef,
+        _context: &DcqlSelectionContext<'_>,
+    ) -> CredentialDescriptor<'a> {
         let credential = self.credential(*cred);
         let id = credential.get("id").map(value_to_id).unwrap_or_default();
         let title = credential
@@ -128,7 +133,7 @@ impl MatcherStore for UbiqueCredentialPackage {
         descriptor.subtitle = credential
             .get("subtitle")
             .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+            .map(Cow::Borrowed);
         descriptor
     }
 
@@ -145,7 +150,7 @@ impl MatcherStore for UbiqueCredentialPackage {
     fn metadata_for_credman(
         &self,
         cred: &Self::CredentialRef,
-        context: &CredentialSelectionContext<'_>,
+        context: &DcqlSelectionContext<'_>,
     ) -> Option<Value> {
         let mut metadata = serde_json::Map::new();
         metadata.insert(
@@ -176,12 +181,21 @@ fn value_to_id(value: &Value) -> String {
 #[dcapi_matcher]
 pub fn matcher_entrypoint(request: String, mut credentials: CredentialReader) {
     let mut raw = Vec::new();
-    if credentials.read_to_end(&mut raw).is_err() {
+    if let Err(err) = credentials.read_to_end(&mut raw) {
+        dcapi_matcher::diagnostics::error(format!(
+            "credential package read error: {err}"
+        ));
         return;
     }
 
-    let Ok(package) = UbiqueCredentialPackage::parse(raw.as_slice()) else {
-        return;
+    let package = match UbiqueCredentialPackage::parse(raw.as_slice()) {
+        Ok(package) => package,
+        Err(err) => {
+            dcapi_matcher::diagnostics::error(format!(
+                "credential package parse error: {err}"
+            ));
+            return;
+        }
     };
     let Ok(response) = match_dc_api_request(&request, &package, &MatcherOptions::default()) else {
         return;
@@ -215,7 +229,18 @@ mod tests {
             package.list_credentials(Some("dc+sd-jwt")),
             Vec::<usize>::new()
         );
-        assert_eq!(package.describe_credential(&0).credential_id, "113");
+        let context = DcqlSelectionContext {
+            request_index: 0,
+            alternative_index: 0,
+            query_id: "test",
+            selected_claims: &[],
+            transaction_data: &[],
+            transaction_data_indices: &[],
+        };
+        assert_eq!(
+            package.describe_credential(&0, &context).credential_id.as_ref(),
+            "113"
+        );
 
         let path = vec![
             PathElement::String("org.iso.18013.5.1".to_string()),

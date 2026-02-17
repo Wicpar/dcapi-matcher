@@ -1,14 +1,8 @@
 #![doc = include_str!("../README.md")]
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    not(any(doc, test, feature = "test-shim"))
-))]
-compile_error!("android-credman-sys is only available on wasm32 targets");
-
 use std::ffi::{c_char, c_void};
 
-#[cfg(all(not(target_arch = "wasm32"), any(doc, test, feature = "test-shim")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod test_shim;
 
 /// Represents information about the application requesting the credential.
@@ -212,7 +206,7 @@ pub mod credman {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), any(doc, test, feature = "test-shim")))]
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(
     unsafe_op_in_unsafe_fn,
     clippy::missing_safety_doc,
@@ -542,7 +536,7 @@ pub mod credman_v2 {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), any(doc, test, feature = "test-shim")))]
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(
     unsafe_op_in_unsafe_fn,
     clippy::missing_safety_doc,
@@ -709,7 +703,7 @@ pub mod credman_v4 {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), any(doc, test, feature = "test-shim")))]
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
 pub mod credman_v4 {
     use super::*;

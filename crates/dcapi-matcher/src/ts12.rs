@@ -1,7 +1,10 @@
+use crate::diagnostics::ErrorExt;
 use crate::error::{MatcherError, Ts12Error, Ts12MetadataError};
-use crate::response::ResolvedField;
-use crate::traits::{CredentialSelectionContext, MatcherStore};
-use dcapi_dcql::{ClaimsPathPointer, PathElement, TransactionData, TransactionDataType};
+use crate::traits::{DcqlSelectionContext, MatcherStore};
+use alloc::borrow::Cow;
+use dcapi_dcql::{
+    ClaimsPathPointer, PathElement, TransactionData, TransactionDataType, path_matches,
+};
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -54,21 +57,27 @@ pub struct Ts12TransactionMetadata {
 
 /// Payment rendering summary for TS12 flows.
 #[derive(Debug, Clone)]
-pub struct Ts12PaymentSummary {
+pub struct Ts12PaymentSummary<'a> {
     /// Merchant/payee name shown in payment UI.
-    pub merchant_name: String,
+    pub merchant_name: Cow<'a, str>,
     /// Transaction amount string shown in payment UI.
-    pub transaction_amount: String,
+    pub transaction_amount: Cow<'a, str>,
     /// Optional extra context for payment UI.
-    pub additional_info: Option<String>,
+    pub additional_info: Option<Cow<'a, str>>,
 }
 
 /// Display payload for one credential selection containing TS12 transaction data.
 #[derive(Debug, Clone)]
-pub(crate) struct Ts12Display {
-    pub transaction_fields: Vec<ResolvedField>,
-    pub payment_summary: Option<Ts12PaymentSummary>,
+pub(crate) struct Ts12Display<'a> {
+    pub transaction_fields: Vec<Ts12DisplayField<'a>>,
+    pub payment_summary: Option<Ts12PaymentSummary<'a>>,
     pub metadata: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Ts12DisplayField<'a> {
+    pub display_name: Cow<'a, str>,
+    pub display_value: Cow<'a, str>,
 }
 
 #[derive(Debug, Clone)]
@@ -105,29 +114,23 @@ pub(crate) fn validate_ts12_transaction_data(
 }
 
 /// Builds TS12 display output for the provided selection context.
-pub(crate) fn build_display_for_context<S>(
-    store: &S,
+pub(crate) fn build_display_for_context<'a, S>(
+    store: &'a S,
     cred: &S::CredentialRef,
     credential_id: &str,
-    context: &CredentialSelectionContext<'_>,
+    context: &DcqlSelectionContext<'_>,
     preferred_locales: &[&str],
-) -> Result<Option<Ts12Display>, MatcherError>
+) -> Result<Option<Ts12Display<'a>>, MatcherError>
 where
     S: MatcherStore + ?Sized,
 {
-    let CredentialSelectionContext::OpenId4VpDcql {
-        transaction_data,
-        transaction_data_indices,
-        ..
-    } = context
-    else {
-        return Ok(None);
-    };
+    let transaction_data = context.transaction_data;
+    let transaction_data_indices = context.transaction_data_indices;
 
     let mut displays = Vec::new();
     let mut payment_summaries = Vec::new();
 
-    for idx in *transaction_data_indices {
+    for idx in transaction_data_indices {
         let Some(td) = transaction_data.get(*idx) else {
             continue;
         };
@@ -139,7 +142,7 @@ where
                 credential_id: credential_id.to_string(),
                 data_type: td.data_type.clone(),
             };
-            tracing::warn!(error = %err, "ts12 metadata warning");
+            err.warn();
             continue;
         };
         let ctx = RenderContext {
@@ -155,7 +158,7 @@ where
         let display = match render_transaction_display(&ctx) {
             Ok(display) => display,
             Err(err) => {
-                tracing::warn!(error = %err, "ts12 metadata warning");
+                err.warn();
                 continue;
             }
         };
@@ -174,9 +177,9 @@ where
     let transaction_fields = displays
         .iter()
         .flat_map(|display| {
-            display.fields.iter().map(|field| ResolvedField {
-                display_name: field.label.clone(),
-                display_value: field.value.clone(),
+            display.fields.iter().map(|field| Ts12DisplayField {
+                display_name: Cow::Owned(field.label.clone()),
+                display_value: Cow::Owned(field.value.clone()),
             })
         })
         .collect::<Vec<_>>();
@@ -190,7 +193,7 @@ where
     let metadata = match build_ts12_metadata(&displays) {
         Ok(value) => Some(value),
         Err(err) => {
-            tracing::warn!(error = %err, "ts12 metadata warning");
+            err.warn();
             None
         }
     };
@@ -200,33 +203,6 @@ where
         payment_summary,
         metadata,
     }))
-}
-
-/// Validates TS12 metadata for the provided payload and locale preferences.
-pub(crate) fn validate_ts12_metadata_for_payload<S>(
-    store: &S,
-    cred: &S::CredentialRef,
-    credential_id: &str,
-    transaction_data: &TransactionData,
-    payload: &Value,
-    metadata: &Ts12TransactionMetadata,
-    preferred_locales: &[&str],
-) -> Result<(), Ts12MetadataError>
-where
-    S: MatcherStore + ?Sized,
-{
-    let ctx = RenderContext {
-        credential_id,
-        transaction_data,
-        payload,
-        metadata,
-        preferred_locales,
-        store,
-        cred,
-        index: 0,
-    };
-    let _ = render_transaction_display(&ctx)?;
-    Ok(())
 }
 
 struct RenderContext<'a, S: MatcherStore + ?Sized> {
@@ -361,23 +337,7 @@ fn find_claim_metadata<'a>(
     if let Some(found) = claims.iter().find(|claim| claim.path == *path) {
         return Some(found);
     }
-    claims
-        .iter()
-        .find(|claim| path_matches(&claim.path, path))
-}
-
-fn path_matches(pattern: &ClaimsPathPointer, actual: &ClaimsPathPointer) -> bool {
-    if pattern.len() != actual.len() {
-        return false;
-    }
-    for (pattern_item, actual_item) in pattern.iter().zip(actual.iter()) {
-        match pattern_item {
-            PathElement::Wildcard => continue,
-            _ if pattern_item == actual_item => continue,
-            _ => return false,
-        }
-    }
-    true
+    claims.iter().find(|claim| path_matches(&claim.path, path))
 }
 
 fn select_locale(
@@ -442,12 +402,18 @@ fn select_locale(
         }
     }
 
+    let Some(first_locale) = candidates.first().cloned() else {
+        return Err(Ts12MetadataError::MissingPreferredLocales {
+            credential_id: credential_id.to_string(),
+            data_type: data_type.clone(),
+        });
+    };
     if missing_ui_label {
         return Err(Ts12MetadataError::MissingLocalizedUiLabel {
             credential_id: credential_id.to_string(),
             data_type: data_type.clone(),
             label: "affirmative_action_label",
-            locale: candidates.first().cloned().unwrap(),
+            locale: first_locale.clone(),
         });
     }
 
@@ -459,7 +425,7 @@ fn select_locale(
         credential_id: credential_id.to_string(),
         data_type: data_type.clone(),
         label: "affirmative_action_label",
-        locale: candidates.first().cloned().unwrap(),
+        locale: first_locale,
     })
 }
 
@@ -572,18 +538,22 @@ fn validate_payload_schema(
 
     ensure_local_schema_refs(credential_id, data_type, schema)?;
 
-    let validator =
-        jsonschema::validator_for(schema).map_err(|err| Ts12MetadataError::SchemaInvalid {
-            credential_id: credential_id.to_string(),
-            data_type: data_type.clone(),
-            source: err.to_owned(),
-        })?;
+    let validator = json_schema_validator_core::JsonSchemaValidator::new(
+        schema.clone(),
+        json_schema_validator_core::ValidationOptions::default(),
+    )
+    .map_err(|error| Ts12MetadataError::SchemaInvalid {
+        credential_id: credential_id.to_string(),
+        data_type: data_type.clone(),
+        error: Box::new(error),
+    })?;
 
-    if let Err(error) = validator.validate(payload) {
+    let errors = validator.validate(payload);
+    if !errors.is_empty() {
         return Err(Ts12MetadataError::SchemaValidation {
             credential_id: credential_id.to_string(),
             data_type: data_type.clone(),
-            source: error.to_owned(),
+            errors,
         });
     }
 

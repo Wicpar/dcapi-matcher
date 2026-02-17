@@ -5,6 +5,7 @@ edition = "2024"
 readme = "README.md"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-thiserror = "2.0"
+thiserror = { workspace = true }
+rustc-hash = { workspace = true }

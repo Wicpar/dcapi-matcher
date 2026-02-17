@@ -1,4 +1,5 @@
 use crate::*;
+use std::borrow::Cow;
 
 /// A visual group (Set) of credentials.
 ///
@@ -11,13 +12,13 @@ use crate::*;
 /// - On hosts without set support (v1), entries are emitted as standalone rows.
 #[derive(Debug, Clone)]
 pub struct CredentialSet<'a> {
-    pub set_id: &'a str,
+    pub set_id: Cow<'a, str>,
     pub slots: Vec<CredentialSlot<'a>>,
 }
 
 impl<'a> CredentialSet<'a> {
-    pub fn new(set_id: &'a str) -> Self {
-        let set_id = if set_id.is_empty() { " " } else { set_id };
+    pub fn new(set_id: impl Into<Cow<'a, str>>) -> Self {
+        let set_id = normalize(set_id.into());
         Self {
             set_id,
             slots: Vec::new(),
@@ -34,6 +35,16 @@ impl<'a> CredentialSet<'a> {
     pub fn add_entry(self, entry: CredentialEntry<'a>) -> Self {
         self.add_slot(entry)
     }
+
+    /// Adds multiple entries, each as its own slot.
+    pub fn add_entries<I>(mut self, entries: I) -> Self
+    where
+        I: IntoIterator<Item = CredentialEntry<'a>>,
+    {
+        self.slots
+            .extend(entries.into_iter().map(CredentialSlot::from));
+        self
+    }
 }
 
 impl<'a> CredmanApply<()> for CredentialSet<'a> {
@@ -44,12 +55,12 @@ impl<'a> CredmanApply<()> for CredentialSet<'a> {
         let host = default_credman();
         if let Some(v2) = host.as_v2() {
             v2.add_entry_set(&EntrySetRequest {
-                set_id: self.set_id,
+                set_id: self.set_id.as_ref(),
                 set_length: self.slots.len() as i32,
             });
             for (i, slot) in self.slots.iter().enumerate() {
                 for entry in &slot.alternatives {
-                    CredmanApply::apply(entry, (self.set_id, i as i32));
+                    CredmanApply::apply(entry, (self.set_id.as_ref(), i as i32));
                 }
             }
             return;
@@ -61,5 +72,13 @@ impl<'a> CredmanApply<()> for CredentialSet<'a> {
                 CredmanApply::apply(entry, ());
             }
         }
+    }
+}
+
+fn normalize<'a>(value: Cow<'a, str>) -> Cow<'a, str> {
+    if value.is_empty() {
+        Cow::Borrowed("_")
+    } else {
+        value
     }
 }

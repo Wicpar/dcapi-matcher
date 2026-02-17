@@ -5,7 +5,8 @@ use crate::models::{
 use crate::path::{ClaimsPathPointer, PathElement, is_mdoc_path};
 use serde::{Deserialize, Serialize};
 use crate::store::{CredentialFormat, CredentialStore, ValueMatch};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
+use rustc_hash::FxHashSet;
 use thiserror::Error;
 
 /// Resolved matching context for one Credential Query id.
@@ -436,12 +437,6 @@ fn validate_query(
     }
 
     if let Some(transaction_data) = transaction_data {
-        if transaction_data.is_empty() {
-            return Err(PlanError::InvalidQuery(
-                "transaction_data must be non-empty when provided".to_string(),
-            ));
-        }
-
         for data in transaction_data {
             if data.data_type.r#type.is_empty() {
                 return Err(PlanError::InvalidQuery(
@@ -650,7 +645,7 @@ where
 }
 
 fn dedupe_claims_by_path(claims: &[ClaimsQuery]) -> Vec<ClaimsQuery> {
-    let mut seen_paths = HashSet::new();
+    let mut seen_paths = FxHashSet::default();
     let mut out = Vec::new();
     for claim in claims {
         if seen_paths.insert(claim.path.clone()) {
@@ -891,7 +886,7 @@ fn expand_optional_prefer_absent(configs: Vec<Config>, options: Vec<Config>) -> 
 }
 
 fn normalize_configs(configs: Vec<Config>) -> Vec<Config> {
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     let mut out = Vec::new();
     for config in configs {
         if seen.insert(config.clone()) {

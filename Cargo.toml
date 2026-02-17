@@ -4,7 +4,6 @@ members = [
     "crates/android-credman-sys",
     "crates/aptitude-consortium-dcapi-matcher",
     "crates/dcapi-dcql",
-    "crates/dcapi-matcher-tracing",
     "crates/dcapi-matcher-macros",
     "crates/dcapi-matcher",
     "crates/dcapi-matcher/examples/cm-matcher-format",
@@ -18,5 +17,27 @@ android-credman-sys = { path = "crates/android-credman-sys", version = "0.1.0" }
 dcapi-dcql = { path = "crates/dcapi-dcql", version = "0.1.0" }
 dcapi-matcher = { path = "crates/dcapi-matcher", version = "0.1.0" }
 dcapi-matcher-macros = { path = "crates/dcapi-matcher-macros", version = "0.1.0" }
-dcapi-matcher-tracing = { path = "crates/dcapi-matcher-tracing", version = "0.1.0" }
-serde_json = { version = "1.0", default-features = false, features = ["alloc", "preserve_order"] }
+base64 = "0.22"
+json-schema-validator-core = "1.0.0"
+mini-alloc = "1.0"
+proc-macro2 = "1.0"
+quote = "1.0"
+serde = "1.0"
+serde_json = "1.0"
+spin = "0.9"
+syn = { version = "2.0", features = ["full"] }
+thiserror = "2.0"
+rustc-hash = "2.0"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = 0
+overflow-checks = false
+incremental = false
+
+[profile.release.package."*"]
+opt-level = "z"

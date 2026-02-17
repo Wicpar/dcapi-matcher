@@ -16,7 +16,7 @@
 - If no valid `transaction_data` entries remain, the request yields an empty response.
 
 **Logging and Errors**
-- Runtime diagnostics are collected via the `dcapi-matcher-tracing` backend (no std/syscalls). Logs are flushed into a Credman credential entry at the end of execution.
+- Runtime diagnostics are collected via the `dcapi_matcher::diagnostics` static logger. `flush_and_apply` renders logs as a Credman entry set when v2 is available, otherwise as individual string-id entries.
 - The matcher avoids hardcoded UI strings. Only error/log messages are formatted in code; all display strings must come from credential metadata or store-provided formatting hooks.
 
 **JSON Order**

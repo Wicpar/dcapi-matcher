@@ -13,5 +13,5 @@ pub use input::*;
 pub use structs::*;
 pub use traits::*;
 
-#[cfg(all(feature = "test-shim", not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub use android_credman_sys::test_shim;

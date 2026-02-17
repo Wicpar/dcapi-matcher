@@ -1,7 +1,7 @@
 #![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
 
 use std::ffi::{CStr, c_char, c_void};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 #[derive(Debug, Clone)]
 pub enum DisplayEvent {
@@ -117,36 +117,43 @@ static DISPLAY: Mutex<DisplaySnapshot> = Mutex::new(DisplaySnapshot { events: Ve
 static REQUEST: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 static CREDENTIALS: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 pub fn record(event: DisplayEvent) {
-    DISPLAY.lock().unwrap().events.push(event);
+    lock(&DISPLAY).events.push(event);
 }
 
 pub fn snapshot_display() -> DisplaySnapshot {
-    DISPLAY.lock().unwrap().clone()
+    lock(&DISPLAY).clone()
 }
 
 pub fn take_display() -> DisplaySnapshot {
-    std::mem::take(&mut *DISPLAY.lock().unwrap())
+    std::mem::take(&mut *lock(&DISPLAY))
 }
 
 pub fn set_request(data: &[u8]) {
-    *REQUEST.lock().unwrap() = data.to_vec();
+    *lock(&REQUEST) = data.to_vec();
 }
 
 pub fn set_credentials(data: &[u8]) {
-    *CREDENTIALS.lock().unwrap() = data.to_vec();
+    *lock(&CREDENTIALS) = data.to_vec();
 }
 
 pub fn request_len() -> u32 {
-    REQUEST.lock().unwrap().len() as u32
+    lock(&REQUEST).len() as u32
 }
 
 pub fn credentials_len() -> u32 {
-    CREDENTIALS.lock().unwrap().len() as u32
+    lock(&CREDENTIALS).len() as u32
 }
 
 pub unsafe fn write_request(buffer: *mut c_void) {
-    let data = REQUEST.lock().unwrap();
+    let data = lock(&REQUEST);
     if buffer.is_null() {
         return;
     }
@@ -154,7 +161,7 @@ pub unsafe fn write_request(buffer: *mut c_void) {
 }
 
 pub unsafe fn read_credentials(buffer: *mut c_void, offset: usize, len: usize) -> usize {
-    let data = CREDENTIALS.lock().unwrap();
+    let data = lock(&CREDENTIALS);
     if buffer.is_null() || offset >= data.len() {
         return 0;
     }

@@ -152,6 +152,21 @@ pub fn select_nodes<'a>(
     Ok(current)
 }
 
+/// Returns true when `actual` matches `pattern`, honoring wildcard segments.
+pub fn path_matches(pattern: &ClaimsPathPointer, actual: &ClaimsPathPointer) -> bool {
+    if pattern.len() != actual.len() {
+        return false;
+    }
+    for (pattern_item, actual_item) in pattern.iter().zip(actual.iter()) {
+        match pattern_item {
+            PathElement::Wildcard => continue,
+            _ if pattern_item == actual_item => continue,
+            _ => return false,
+        }
+    }
+    true
+}
+
 /// Returns true only for valid mdoc claims paths (`[namespace, element_identifier]`).
 pub fn is_mdoc_path(path: &ClaimsPathPointer) -> bool {
     if path.len() != 2 {

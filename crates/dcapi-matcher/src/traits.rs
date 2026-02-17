@@ -1,36 +1,39 @@
-use crate::models::{PROTOCOL_OPENID4VCI, PROTOCOL_OPENID4VP};
-use crate::error::CredentialValidationError;
+use crate::diagnostics::LogLevel;
+use crate::models::PROTOCOL_OPENID4VP;
 use crate::config::{OpenId4VciConfig, OpenId4VpConfig};
 use crate::ts12::{Ts12PaymentSummary, Ts12TransactionMetadata};
 use dcapi_dcql::{ClaimsPathPointer, CredentialStore};
-use alloc::string::String;
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 use serde_json::Value;
 
 /// User-facing credential descriptor used to build Credman entries.
 #[derive(Debug, Clone)]
-pub struct CredentialDescriptor {
+pub struct CredentialDescriptor<'a> {
     /// Credential selection id returned to host.
-    pub credential_id: String,
+    pub credential_id: Cow<'a, str>,
     /// Entry title.
-    pub title: String,
+    pub title: Cow<'a, str>,
     /// Optional icon bytes.
-    pub icon: Option<Vec<u8>>,
+    pub icon: Option<Cow<'a, [u8]>>,
     /// Optional subtitle.
-    pub subtitle: Option<String>,
+    pub subtitle: Option<Cow<'a, str>>,
     /// Optional disclaimer.
-    pub disclaimer: Option<String>,
+    pub disclaimer: Option<Cow<'a, str>>,
     /// Optional warning.
-    pub warning: Option<String>,
+    pub warning: Option<Cow<'a, str>>,
     /// Optional credential-scoped metadata object.
     pub metadata: Option<Value>,
     /// Display fields.
-    pub fields: Vec<CredentialDescriptorField>,
+    pub fields: Vec<CredentialDescriptorField<'a>>,
 }
 
-impl CredentialDescriptor {
+impl<'a> CredentialDescriptor<'a> {
     /// Creates a descriptor with mandatory fields.
-    pub fn new(credential_id: impl Into<String>, title: impl Into<String>) -> Self {
+    pub fn new(
+        credential_id: impl Into<Cow<'a, str>>,
+        title: impl Into<Cow<'a, str>>,
+    ) -> Self {
         Self {
             credential_id: credential_id.into(),
             title: title.into(),
@@ -46,51 +49,34 @@ impl CredentialDescriptor {
 
 /// One label/value field for credential detail rendering.
 #[derive(Debug, Clone)]
-pub struct CredentialDescriptorField {
+pub struct CredentialDescriptorField<'a> {
     /// Field label.
-    pub display_name: String,
+    pub display_name: Cow<'a, str>,
     /// Field value.
-    pub display_value: String,
+    pub display_value: Option<Cow<'a, str>>,
 }
 
 /// Context passed when building Credman metadata for one candidate entry.
 #[derive(Debug)]
-pub enum CredentialSelectionContext<'a> {
-    /// Selection produced from OpenID4VP + DCQL.
-    OpenId4VpDcql {
-        /// Request index in `DcApiRequest.requests`.
-        request_index: usize,
-        /// Alternative index in planned DCQL output.
-        alternative_index: usize,
-        /// DCQL credential query id.
-        query_id: &'a str,
-        /// Claim constraints selected for this query.
-        selected_claims: &'a [dcapi_dcql::ClaimsQuery],
-        /// Transaction data decoded from request.
-        transaction_data: &'a [dcapi_dcql::TransactionData],
-        /// Transaction data indices bound to this query id in the selected alternative.
-        transaction_data_indices: &'a [usize],
-    },
-    /// Selection produced from OpenID4VCI credential offer.
-    OpenId4VciOffer {
-        /// Request index in `DcApiRequest.requests`.
-        request_index: usize,
-        /// Credential issuer identifier.
-        credential_issuer: &'a str,
-        /// Credential configuration id.
-        credential_configuration_id: &'a str,
-        /// Optional configuration object resolved from issuer metadata.
-        credential_configuration: Option<&'a Value>,
-    },
+pub struct DcqlSelectionContext<'a> {
+    /// Request index in `DcApiRequest.requests`.
+    pub request_index: usize,
+    /// Alternative index in planned DCQL output.
+    pub alternative_index: usize,
+    /// DCQL credential query id.
+    pub query_id: &'a str,
+    /// Claim constraints selected for this query.
+    pub selected_claims: &'a [dcapi_dcql::ClaimsQuery],
+    /// Transaction data decoded from request.
+    pub transaction_data: &'a [dcapi_dcql::TransactionData],
+    /// Transaction data indices bound to this query id in the selected alternative.
+    pub transaction_data_indices: &'a [usize],
 }
 
-impl<'a> CredentialSelectionContext<'a> {
+impl DcqlSelectionContext<'_> {
     /// Returns a protocol label for metadata serialization.
     pub fn protocol(&self) -> &'static str {
-        match self {
-            Self::OpenId4VpDcql { .. } => PROTOCOL_OPENID4VP,
-            Self::OpenId4VciOffer { .. } => PROTOCOL_OPENID4VCI,
-        }
+        PROTOCOL_OPENID4VP
     }
 }
 
@@ -99,19 +85,12 @@ impl<'a> CredentialSelectionContext<'a> {
 /// This extends `dcapi_dcql::CredentialStore` so DCQL matching can be delegated to
 /// `dcapi-dcql`. Implementers only need to define how credentials are displayed.
 pub trait MatcherStore: CredentialStore {
-    /// Returns descriptor data for one credential.
-    fn describe_credential(&self, cred: &Self::CredentialRef) -> CredentialDescriptor;
-
     /// Returns descriptor data for one credential in a specific selection context.
-    ///
-    /// Override this to tailor fields based on requested claims (DCQL).
-    fn describe_credential_for_context(
-        &self,
+    fn describe_credential<'a>(
+        &'a self,
         cred: &Self::CredentialRef,
-        _context: &CredentialSelectionContext<'_>,
-    ) -> CredentialDescriptor {
-        self.describe_credential(cred)
-    }
+        context: &DcqlSelectionContext<'_>,
+    ) -> CredentialDescriptor<'a>;
 
     /// Returns whether this credential is available for a protocol.
     fn supports_protocol(&self, _cred: &Self::CredentialRef, _protocol: &str) -> bool {
@@ -134,7 +113,7 @@ pub trait MatcherStore: CredentialStore {
     }
 
     /// Logging level for matcher diagnostics. `None` disables logging.
-    fn log_level(&self) -> Option<tracing_core::Level> {
+    fn log_level(&self) -> Option<LogLevel> {
         None
     }
 
@@ -142,19 +121,9 @@ pub trait MatcherStore: CredentialStore {
     fn metadata_for_credman(
         &self,
         _cred: &Self::CredentialRef,
-        _context: &CredentialSelectionContext<'_>,
+        _context: &DcqlSelectionContext<'_>,
     ) -> Option<Value> {
         None
-    }
-
-    /// Validates the credential package.
-    ///
-    /// Return an error to remove the credential from consideration and emit a warning.
-    fn validate_credential(
-        &self,
-        _cred: &Self::CredentialRef,
-    ) -> Result<(), CredentialValidationError> {
-        Ok(())
     }
 
     /// Returns resolved TS12 transaction metadata for display and validation.
@@ -178,14 +147,14 @@ pub trait MatcherStore: CredentialStore {
     /// Return `Some` to render the credential as a payment entry for the given transaction data.
     /// The summary fields must be derived from credential package metadata/payloads and already
     /// localized as needed; the matcher does not inject hardcoded strings.
-    fn ts12_payment_summary(
-        &self,
+    fn ts12_payment_summary<'a>(
+        &'a self,
         _cred: &Self::CredentialRef,
         _transaction_data: &dcapi_dcql::TransactionData,
         _payload: &Value,
         _metadata: &Ts12TransactionMetadata,
         _locale: &str,
-    ) -> Option<Ts12PaymentSummary> {
+    ) -> Option<Ts12PaymentSummary<'a>> {
         None
     }
 

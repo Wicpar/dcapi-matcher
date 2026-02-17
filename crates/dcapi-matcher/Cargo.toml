@@ -7,16 +7,12 @@ edition = "2024"
 android-credman = { workspace = true }
 dcapi-dcql = { workspace = true }
 dcapi-matcher-macros = { workspace = true }
-dcapi-matcher-tracing = { workspace = true }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { workspace = true, default-features = false, features = ["alloc", "preserve_order"] }
-ciborium = { version = "0.2", default-features = false }
-ciborium-io = "0.2"
-base64 = "0.22"
-thiserror = "2.0"
-jsonschema = { version = "0.42.0", default-features = false }
-tracing = { version = "0.1", default-features = false }
-tracing-core = { version = "0.1", default-features = false }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+thiserror = { workspace = true }
+json-schema-validator-core = { workspace = true }
+spin = { workspace = true }
 
 [features]
 std = []

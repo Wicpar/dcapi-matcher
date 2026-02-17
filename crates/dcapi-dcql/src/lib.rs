@@ -5,7 +5,9 @@ mod planner;
 mod store;
 
 pub use models::*;
-pub use path::{ClaimsPathPointer, PathElement, PathError, is_mdoc_path, select_nodes};
+pub use path::{
+    ClaimsPathPointer, PathElement, PathError, is_mdoc_path, path_matches, select_nodes,
+};
 pub use planner::{
     CredentialSetOptionMode, OptionalCredentialSetsMode, PlanError, PlanOptions, QueryMatches,
     SelectionAlternative, SelectionEntry, SelectionPlan, TransactionDataAssignment, plan_selection,

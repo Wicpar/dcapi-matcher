@@ -10,10 +10,13 @@ pub struct CredentialSlot<'a> {
 }
 
 impl<'a> CredentialSlot<'a> {
-    /// Creates a new slot with a single initial entry.
-    pub fn new(entry: CredentialEntry<'a>) -> Self {
+    /// Creates a new slot with one or more initial entries.
+    pub fn new<I>(entries: I) -> Self
+    where
+        I: IntoIterator<Item = CredentialEntry<'a>>,
+    {
         Self {
-            alternatives: vec![entry],
+            alternatives: entries.into_iter().collect(),
         }
     }
 
@@ -26,6 +29,6 @@ impl<'a> CredentialSlot<'a> {
 
 impl<'a> From<CredentialEntry<'a>> for CredentialSlot<'a> {
     fn from(entry: CredentialEntry<'a>) -> Self {
-        CredentialSlot::new(entry)
+        CredentialSlot::new(core::iter::once(entry))
     }
 }

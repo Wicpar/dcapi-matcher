@@ -20,13 +20,11 @@ entry/set structures.
 
 - `match_dc_api_request(request_json, store, options)`
 - `MatcherStore` (your package adapter trait)
-- `ResolvedMatcherResponse` (owned response; convert to Credman with `as_credman_response()` or apply with `apply()`)
+- `MatcherResponse` (owned response; apply with `apply()`)
 - `diagnostics` (collect and render execution diagnostics as Credman entries)
 
 ## Package Decode Helpers
 
-- `decode_cbor_package`
-- `decode_cbor_package_from_reader`
 - `decode_json_package`
 
 ## Metadata Model
@@ -37,7 +35,7 @@ For each candidate credential, metadata passed to Credman can combine:
 - framework-generated `selection_context` metadata (protocol/query context),
 - `MatcherStore::metadata_for_credman` (dynamic app-defined metadata).
 
-JSON object insertion order is preserved (workspace uses `serde_json` with `preserve_order`).
+JSON object keys are stored in deterministic order (serde_json default BTreeMap; insertion order is not preserved).
 
 ## Diagnostics Rendering
 
@@ -45,21 +43,17 @@ JSON object insertion order is preserved (workspace uses `serde_json` with `pres
 credential set (`dcapi:diagnostics`).
 
 - Scope lifecycle:
-  - each `#[dcapi_matcher]` invocation starts a fresh diagnostics scope.
-  - the macro flushes diagnostics at the end, after your matcher function returns (or panics).
+  - `match_dc_api_request` and `match_dc_api_request_value` clear diagnostics at the start of matching.
+  - the `#[dcapi_matcher]` macro flushes diagnostics at the end, after your matcher function returns (or panics).
 - Severity filtering:
   - levels are `Trace`, `Debug`, `Info`, `Warn`, `Error`.
-  - default render threshold is `Error`.
-  - lower the threshold with `diagnostics::set_render_level(...)` inside your matcher call.
-  - set a process-wide default for future invocations with `diagnostics::set_default_render_level(...)`.
+  - logging is disabled unless you call `diagnostics::set_level(...)` (for example via `MatcherStore::log_level`).
 - Automatic recording:
   - matcher framework errors returned by `match_dc_api_request` (and package decode helpers)
     are recorded automatically.
   - panics caught by `#[dcapi_matcher]` are recorded as error diagnostics.
 - Manual recording:
-  - use `diagnostics::trace/debug/info/warn/error`, `diagnostics::push(...)`, or
-    `diagnostics::push_with_detail(...)`
-    to add app-specific diagnostics.
+  - use `diagnostics::trace/debug/info/warn/error` to add app-specific diagnostics.
 
 ## OpenID Compliance Profile
 
@@ -81,8 +75,7 @@ The matcher currently enforces and/or supports the following OpenID behavior:
       only local fragment refs (starting with `#`) are accepted.
     - `MatcherStore::preferred_locales` must be provided for TS12; missing localized labels cause
       the matcher to return an error.
-    - transaction fields are emitted separately (`ResolvedCredentialEntry.transaction_fields`)
-      and appear before claim fields in string-id entries.
+    - transaction fields are emitted as entry fields and appear before claim fields in string-id entries.
     - payment-style rendering is only used when a single TS12 entry provides payment payload data,
       and additional info is derived from localized transaction fields (no hardcoded labels).
     - optional `MatcherStore::format_ts12_value` hook lets wallets localize value codes
@@ -103,3 +96,9 @@ The matcher currently enforces and/or supports the following OpenID behavior:
 
 This split is intentional: `dcapi-matcher` provides deterministic matching and response shaping,
 while network retrieval and cryptographic verification for signed flows can be layered on top by the integrator.
+
+## Building and testing:
+Thism will build the matcher and copy it over to the expo project
+```sh
+cargo build -p aptitude-consortium-dcapi-matcher --target wasm32-wasip1 --release && wasm-opt --enable-bulk-memory -Oz -o ./target/wasm32-wasip1/release/aptitude-consortium-dcapi-matcher.opt.wasm ./target/wasm32-wasip1/release/aptitude-consortium-dcapi-matcher.wasm && gzip -9 -c ./target/wasm32-wasip1/release/aptitude-consortium-dcapi-matcher.opt.wasm > ../expo-digital-credentials-api/android/src/main/assets/aptitude-consortium-matcher.wasm
+```
