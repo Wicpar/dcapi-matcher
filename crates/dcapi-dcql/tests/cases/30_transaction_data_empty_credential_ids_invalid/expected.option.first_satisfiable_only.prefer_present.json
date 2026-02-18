@@ -1,5 +1,4 @@
 {
   "result": "error",
-  "error": "InvalidQuery",
-  "message": "transaction_data[].credential_ids must be non-empty"
+  "error": "Unsatisfied"
 }

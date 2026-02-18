@@ -1,25 +1,23 @@
+use serde::{Deserialize, Serialize};
+use crate::CredentialReader;
 use crate::models::{ClaimValue, ClaimsQuery, CredentialQuery, TransactionData, TrustedAuthority};
 use crate::path::ClaimsPathPointer;
 
 /// Normalized credential format identifiers used by the planner.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum CredentialFormat {
-    /// ISO/IEC mdoc (`mso_mdoc`).
+    #[serde(rename = "mso_mdoc")]
     MsoMdoc,
-    /// SD-JWT VC (`dc+sd-jwt`).
+    #[serde(rename = "dc+sd-jwt")]
     DcSdJwt,
-    /// Any other wallet-local or extension format identifier.
-    Other(String),
+    #[default]
+    #[serde(other)]
+    Unknown,
 }
 
-impl CredentialFormat {
-    /// Convert a query format string into the planner enum.
-    pub fn from_query_format(format: &str) -> Self {
-        match format {
-            "mso_mdoc" => Self::MsoMdoc,
-            "dc+sd-jwt" => Self::DcSdJwt,
-            _ => Self::Other(format.to_owned()),
-        }
+impl From<&str> for CredentialFormat {
+    fn from(value: &str) -> Self {
+        match value { "mso_mdoc" => Self::MsoMdoc, "dc+sd-jwt" => Self::DcSdJwt, _ => Self::Unknown }
     }
 }
 
@@ -38,9 +36,21 @@ pub enum ValueMatch {
 /// can keep zero-copy handles to wallet-internal credential records.
 pub trait CredentialStore {
     type CredentialRef: Clone + Eq + std::hash::Hash;
+    type ReadResult;
+
+    /// Build a store from a credentials reader.
+    fn from_reader(reader: &mut dyn std::io::Read) -> Self::ReadResult;
+
+    /// Build a store from the default credentials reader.
+    fn read() -> Self::ReadResult
+    where
+        Self: Sized,
+    {
+        Self::from_reader(CredentialReader::new())
+    }
 
     /// Enumerate credential references, optionally filtered by format.
-    fn list_credentials(&self, format: Option<&str>) -> Vec<Self::CredentialRef>;
+    fn list_credentials(&self, format: Option<CredentialFormat>) -> Vec<Self::CredentialRef>;
 
     /// Format identifier for the credential.
     fn format(&self, cred: &Self::CredentialRef) -> CredentialFormat;

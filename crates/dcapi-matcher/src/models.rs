@@ -61,6 +61,10 @@ impl RequestData {
 /// OpenID4VP request payload.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OpenId4VpRequest {
+    /// Response type parameter.
+    pub response_type: Option<String>,
+    /// Response mode parameter.
+    pub response_mode: Option<String>,
     /// DCQL query request.
     pub dcql_query: Option<DcqlQuery>,
     /// Transaction data constraints as defined by OpenID4VP.

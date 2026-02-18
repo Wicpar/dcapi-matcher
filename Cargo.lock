@@ -16,6 +16,7 @@ name = "android-credman"
 version = "0.1.0"
 dependencies = [
  "android-credman-sys",
+ "thiserror",
 ]
 
 [[package]]
@@ -55,20 +56,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
-name = "cm-matcher-format"
-version = "0.1.0"
-dependencies = [
- "android-credman",
- "dcapi-dcql",
- "dcapi-matcher",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "dcapi-dcql"
 version = "0.1.0"
 dependencies = [
+ "android-credman",
  "rustc-hash",
  "serde",
  "serde_json",
@@ -470,16 +461,6 @@ checksum = "42d3e9c45c09de15d06dd8acf5f4e0e399e85927b7f00711024eb7ae10fa4869"
 dependencies = [
  "displaydoc",
  "zerovec",
-]
-
-[[package]]
-name = "ubique-matcher-format"
-version = "0.1.0"
-dependencies = [
- "android-credman",
- "dcapi-dcql",
- "dcapi-matcher",
- "serde_json",
 ]
 
 [[package]]

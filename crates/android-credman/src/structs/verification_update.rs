@@ -37,7 +37,7 @@ impl<'a> VerificationEntryUpdate<'a> {
 
 impl<'a> CredmanApply<()> for VerificationEntryUpdate<'a> {
     fn apply(&self, _: ()) {
-        let host = default_credman();
+        let host = credman();
         host.set_additional_disclaimer_and_url_for_verification_entry(
             &VerificationEntryUpdateRequest {
                 cred_id: self.cred_id.as_ref(),

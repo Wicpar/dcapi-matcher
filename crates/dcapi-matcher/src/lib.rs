@@ -7,6 +7,7 @@ mod error;
 mod config;
 pub mod diagnostics;
 mod models;
+mod profile;
 mod traits;
 mod ts12;
 
@@ -14,13 +15,14 @@ pub use dcapi_matcher_macros::dcapi_matcher;
 pub use config::{OpenId4VciConfig, OpenId4VpConfig};
 pub use diagnostics::LogLevel;
 pub use engine::{
-    MatcherOptions, decode_request_data, match_dc_api_request, match_dc_api_request_value,
+    MatcherOptions, decode_request_data, match_dc_api_request,
 };
 pub use error::{
     CredentialPackageError, MatcherError, OpenId4VpError, OpenId4VciError, RequestDataError,
     Ts12Error, Ts12MetadataError,
 };
 pub use models::*;
+pub use profile::{DefaultProfile, HaipProfile, HaipProfileError, Profile, ProfileError};
 pub use android_credman::{
     CredentialEntry, CredentialSet, CredentialSlot, Field, InlineIssuanceEntry, MatcherResponse,
     MatcherResult, PaymentEntry, StringIdEntry,

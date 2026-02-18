@@ -14,7 +14,6 @@ pub fn dcapi_matcher(_attr: TokenStream, item: TokenStream) -> TokenStream {
         pub fn main() {
             ::dcapi_matcher::diagnostics::begin();
             #fn_name(
-                ::android_credman::FromRequest::from_request(),
                 ::android_credman::FromCredentials::from_credentials(),
             );
             ::dcapi_matcher::diagnostics::flush_and_apply();

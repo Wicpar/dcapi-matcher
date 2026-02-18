@@ -18,7 +18,7 @@ impl<'a> Field<'a> {
         D: Into<Cow<'a, str>>,
     {
         let display_name = normalize(display_name.into());
-        let display_value = display_value.map(|value| normalize(value.into()));
+        let display_value = display_value.map(Into::into);
         Self {
             display_name,
             display_value,
@@ -26,7 +26,7 @@ impl<'a> Field<'a> {
     }
 }
 
-fn normalize<'a>(value: Cow<'a, str>) -> Cow<'a, str> {
+fn normalize(value: Cow<str>) -> Cow<str> {
     if value.is_empty() {
         Cow::Borrowed("_")
     } else {
@@ -36,7 +36,7 @@ fn normalize<'a>(value: Cow<'a, str>) -> Cow<'a, str> {
 
 impl<'a> CredmanApply<&'a str> for Field<'a> {
     fn apply(&self, cred_id: &'a str) {
-        let host = default_credman();
+        let host = credman();
         host.add_field_for_string_id_entry(&FieldForStringIdEntryRequest {
             cred_id,
             field_display_name: self.display_name.as_ref(),
@@ -47,7 +47,7 @@ impl<'a> CredmanApply<&'a str> for Field<'a> {
 
 impl<'a> CredmanApply<(&'a str, &'a str, i32)> for Field<'a> {
     fn apply(&self, (cred_id, set_id, set_index): (&'a str, &'a str, i32)) {
-        let host = default_credman();
+        let host = credman();
         if let Some(v2) = host.as_v2() {
             v2.add_field_to_entry_set(&FieldToEntrySetRequest {
                 cred_id,

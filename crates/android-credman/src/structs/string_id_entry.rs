@@ -70,7 +70,7 @@ impl<'a> StringIdEntry<'a> {
 
 impl<'a> CredmanApply<()> for StringIdEntry<'a> {
     fn apply(&self, _: ()) {
-        let host = default_credman();
+        let host = credman();
         host.add_string_id_entry(&StringIdEntryRequest {
             cred_id: self.cred_id.as_ref(),
             icon: self.icon.as_ref().map(|icon| icon.as_ref()),
@@ -95,7 +95,7 @@ impl<'a> CredmanApply<()> for StringIdEntry<'a> {
 
 impl<'a> CredmanApply<(&'a str, i32)> for StringIdEntry<'a> {
     fn apply(&self, (set_id, set_index): (&'a str, i32)) {
-        let host = default_credman();
+        let host = credman();
         if let Some(v2) = host.as_v2() {
             v2.add_entry_to_set(&EntryToSetRequest {
                 cred_id: self.cred_id.as_ref(),

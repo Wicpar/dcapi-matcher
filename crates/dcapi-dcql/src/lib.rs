@@ -4,6 +4,7 @@ mod path;
 mod planner;
 mod store;
 
+pub use android_credman::CredentialReader;
 pub use models::*;
 pub use path::{
     ClaimsPathPointer, PathElement, PathError, is_mdoc_path, path_matches, select_nodes,

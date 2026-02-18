@@ -1,4 +1,5 @@
 use dcapi_dcql::{ClaimsPathPointer, TransactionDataType};
+use crate::profile::ProfileError;
 use alloc::string::String;
 use core::error::Error as CoreError;
 use thiserror::Error;
@@ -263,6 +264,9 @@ pub enum MatcherError {
     /// DCQL planning failed.
     #[error("dcql planning error")]
     Dcql(#[from] dcapi_dcql::PlanError),
+    /// DCQL profile validation failed.
+    #[error("dcql profile error")]
+    Profile(#[from] ProfileError),
     /// Credential package decoding failed.
     #[error("credential package decode error")]
     CredentialPackageDecode(#[from] CredentialPackageError),

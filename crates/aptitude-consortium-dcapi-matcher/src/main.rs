@@ -1,4 +1,4 @@
-use android_credman::CredmanApplyExt;
+use android_credman::{CredmanRender, CredentialReader};
 use base64::Engine;
 use dcapi_dcql::{
     ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, PlanOptions, TransactionData,
@@ -6,12 +6,13 @@ use dcapi_dcql::{
 };
 use dcapi_matcher::diagnostics::error;
 use dcapi_matcher::{
-    LogLevel, MatcherOptions, MatcherStore, OpenId4VciConfig, OpenId4VpConfig, Ts12ClaimMetadata,
-    Ts12LocalizedLabel, Ts12LocalizedValue, Ts12TransactionMetadata, Ts12UiLabels, dcapi_matcher,
-    decode_json_package, match_dc_api_request,
+    DefaultProfile, LogLevel, MatcherOptions, MatcherStore, OpenId4VciConfig, OpenId4VpConfig,
+    Ts12ClaimMetadata, Ts12LocalizedLabel, Ts12LocalizedValue, Ts12TransactionMetadata,
+    Ts12UiLabels, dcapi_matcher, decode_json_package, match_dc_api_request,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use std::io::Read;
 
 #[derive(Debug, Deserialize)]
 struct PackageConfig {
@@ -104,7 +105,7 @@ enum IconConfig {
 #[derive(Debug, Clone)]
 struct ResolvedCredential {
     id: String,
-    format: String,
+    format: CredentialFormat,
     title: String,
     subtitle: Option<String>,
     disclaimer: Option<String>,
@@ -174,8 +175,19 @@ impl PackageStore {
 
 impl CredentialStore for PackageStore {
     type CredentialRef = usize;
+    type ReadResult = Result<(Self, PlanOptions), String>;
 
-    fn list_credentials(&self, format: Option<&str>) -> Vec<Self::CredentialRef> {
+    fn from_reader(mut reader: CredentialReader) -> Self::ReadResult {
+        let mut buffer = Vec::with_capacity(reader.len() as usize);
+        reader
+            .read_to_end(&mut buffer)
+            .map_err(|err| err.to_string())?;
+        let config: PackageConfig =
+            decode_json_package(&buffer).map_err(|err| err.to_string())?;
+        Self::from_config(config)
+    }
+
+    fn list_credentials(&self, format: Option<CredentialFormat>) -> Vec<Self::CredentialRef> {
         self.credentials
             .iter()
             .enumerate()
@@ -185,7 +197,7 @@ impl CredentialStore for PackageStore {
     }
 
     fn format(&self, cred: &Self::CredentialRef) -> CredentialFormat {
-        CredentialFormat::from_query_format(&self.get(*cred).format)
+        self.get(*cred).format
     }
 
     fn has_vct(&self, cred: &Self::CredentialRef, vct: &str) -> bool {
@@ -273,10 +285,10 @@ impl MatcherStore for PackageStore {
             return None;
         }
         let credential = self.get(*cred);
-        if let Some(metadata) = credential.metadata.as_ref() {
-            if let Some(display_name) = claim_display_name_from_metadata(metadata, path) {
-                return Some(display_name);
-            }
+        if let Some(metadata) = credential.metadata.as_ref()
+            && let Some(display_name) = claim_display_name_from_metadata(metadata, path)
+        {
+            return Some(display_name);
         }
         credential
             .fields
@@ -298,10 +310,9 @@ impl MatcherStore for PackageStore {
             .fields
             .iter()
             .find(|field| path_matches(&field.path, path))
+            && let Some(value) = field.display_value.as_deref()
         {
-            if let Some(value) = field.display_value.as_deref() {
-                return Some(value);
-            }
+            return Some(value);
         }
         value_from_claims(&credential.claims, path)
     }
@@ -456,10 +467,10 @@ fn claim_display_name_from_metadata<'a>(
             }
             if let Some(display) = entry.get("display").and_then(Value::as_array) {
                 for display_entry in display {
-                    if let Some(name) = display_entry.get("name").and_then(Value::as_str) {
-                        if !name.is_empty() {
-                            return Some(name);
-                        }
+                    if let Some(name) = display_entry.get("name").and_then(Value::as_str)
+                        && !name.is_empty()
+                    {
+                        return Some(name);
                     }
                 }
             }
@@ -520,7 +531,7 @@ fn decode_icon(icon: IconConfig) -> Result<Option<Vec<u8>>, String> {
 
 /// Credman matcher entrypoint for aptitude consortium config packages.
 #[dcapi_matcher]
-pub fn matcher_entrypoint(request: String, credentials: String) {
+pub fn matcher_entrypoint(credentials: String) {
     let Some(config) = decode_config(credentials.as_bytes()) else {
         return;
     };
@@ -533,8 +544,8 @@ pub fn matcher_entrypoint(request: String, credentials: String) {
     };
 
     let options = MatcherOptions { dcql: dcql_options };
-    let Ok(matched) = match_dc_api_request(&request, &store, &options) else {
+    let Ok(matched) = match_dc_api_request(&store, &options, &DefaultProfile) else {
         return;
     };
-    matched.apply();
+    matched.render();
 }

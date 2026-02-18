@@ -2,7 +2,7 @@
 //!
 //! # Purpose
 //! This module exposes a single borrowed-data API over the raw ABI:
-//! - `default_credman()` returns a process-wide `&dyn Credman`.
+//! - `credman()` returns a process-wide `&dyn Credman`.
 //! - Version-specific capabilities are discovered through `as_v2()/as_v3()/as_v4()`.
 //! - Request structs borrow caller data to minimize copies.
 //!
@@ -12,9 +12,9 @@
 //! 3. Probe for newer APIs when needed.
 //!
 //! ```rust
-//! use android_credman::{default_credman, EntrySetRequest, StringIdEntryRequest, EntryToSetRequest};
+//! use android_credman::{credman, EntrySetRequest, StringIdEntryRequest, EntryToSetRequest};
 //!
-//! let host = default_credman();
+//! let host = credman();
 //! host.add_string_id_entry(&StringIdEntryRequest {
 //!     cred_id: "pid-1",
 //!     icon: None,
@@ -41,6 +41,8 @@
 //! ```
 
 use crate::abi;
+
+// === Request types ===
 
 /// Borrowed request for `AddStringIdEntry`.
 ///
@@ -236,12 +238,14 @@ pub struct PackageInfoRequest<'a> {
     pub package_icon: Option<&'a [u8]>,
 }
 
+// === Traits ===
+
+mod sealed {
+    pub trait Sealed {}
+}
+
 /// Base Credman host contract.
-///
-/// # Purpose
-/// Provide a single runtime-selected entry-point (`default_credman`) while still
-/// allowing version-gated access through extension traits (`CredmanV2+`).
-pub trait Credman: Sync {
+pub trait Credman: sealed::Sealed + Send + Sync {
     /// Host-reported version from `GetWasmVersion`.
     fn wasm_version(&self) -> u32;
 
@@ -328,17 +332,19 @@ pub trait CredmanV4: CredmanV3 {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct HostCredmanV1;
+// === Host selection ===
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct HostCredmanV2;
+struct HostCredmanV1;
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct HostCredmanV3;
+struct HostCredmanV2;
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct HostCredmanV4;
+struct HostCredmanV3;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct HostCredmanV4;
 
 static HOST_V1: HostCredmanV1 = HostCredmanV1;
 static HOST_V2: HostCredmanV2 = HostCredmanV2;
@@ -348,12 +354,10 @@ static HOST_V4: HostCredmanV4 = HostCredmanV4;
 /// Returns the process-wide host facade selected by `GetWasmVersion`.
 ///
 /// # Usage
-/// 1. Call `default_credman()` once.
+/// 1. Call `credman()` once.
 /// 2. Use base methods for v1-safe APIs.
 /// 3. Ask for `as_v2` / `as_v3` / `as_v4` before calling newer APIs.
-///
-/// The returned trait object is backed by a zero-sized singleton implementation.
-pub fn default_credman() -> &'static dyn Credman {
+pub fn credman() -> &'static dyn Credman {
     match abi::get_wasm_version() {
         0 | 1 => &HOST_V1,
         2 => &HOST_V2,
@@ -362,26 +366,15 @@ pub fn default_credman() -> &'static dyn Credman {
     }
 }
 
-/// Convenience probe for set-capable hosts.
-pub fn default_credman_v2() -> Option<&'static dyn CredmanV2> {
-    default_credman().as_v2()
-}
-
-/// Convenience probe for v3 payment-set API.
-pub fn default_credman_v3() -> Option<&'static dyn CredmanV3> {
-    default_credman().as_v3()
-}
-
-/// Convenience probe for v4 system APIs.
-pub fn default_credman_v4() -> Option<&'static dyn CredmanV4> {
-    default_credman().as_v4()
-}
+// === Host implementations ===
 
 impl Credman for HostCredmanV1 {
     fn wasm_version(&self) -> u32 {
         abi::get_wasm_version()
     }
 }
+
+impl sealed::Sealed for HostCredmanV1 {}
 
 impl Credman for HostCredmanV2 {
     fn wasm_version(&self) -> u32 {
@@ -394,6 +387,7 @@ impl Credman for HostCredmanV2 {
 }
 
 impl CredmanV2 for HostCredmanV2 {}
+impl sealed::Sealed for HostCredmanV2 {}
 
 impl Credman for HostCredmanV3 {
     fn wasm_version(&self) -> u32 {
@@ -411,6 +405,7 @@ impl Credman for HostCredmanV3 {
 
 impl CredmanV2 for HostCredmanV3 {}
 impl CredmanV3 for HostCredmanV3 {}
+impl sealed::Sealed for HostCredmanV3 {}
 
 impl Credman for HostCredmanV4 {
     fn wasm_version(&self) -> u32 {
@@ -433,3 +428,4 @@ impl Credman for HostCredmanV4 {
 impl CredmanV2 for HostCredmanV4 {}
 impl CredmanV3 for HostCredmanV4 {}
 impl CredmanV4 for HostCredmanV4 {}
+impl sealed::Sealed for HostCredmanV4 {}

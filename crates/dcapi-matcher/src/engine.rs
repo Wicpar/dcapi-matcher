@@ -8,6 +8,7 @@ use crate::models::{
     PROTOCOL_OPENID4VP, PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
     PROTOCOL_OPENID4VP_V1_UNSIGNED, RequestData, TransactionDataInput,
 };
+use crate::profile::{Profile, ProfileError};
 use crate::traits::{DcqlSelectionContext, MatcherStore};
 use crate::ts12;
 use alloc::borrow::Cow;
@@ -17,10 +18,11 @@ use android_credman::{
     CredentialEntry, CredentialSet, CredentialSlot, Field, InlineIssuanceEntry, MatcherResponse,
     PaymentEntry, StringIdEntry,
 };
+use android_credman::get_request_string;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use core::hash::Hash;
-use dcapi_dcql::{PathElement, PlanOptions, SelectionAlternative, TransactionData};
+use dcapi_dcql::{CredentialFormat, PathElement, PlanOptions, SelectionAlternative, TransactionData};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -31,19 +33,22 @@ pub struct MatcherOptions {
     pub dcql: PlanOptions,
 }
 
-/// Parses and matches a DC API request with the given credential store.
-pub fn match_dc_api_request<'a, S>(
-    request_json: &str,
+/// Parses and matches the DC API request from the Credman host.
+pub fn match_dc_api_request<'a, S, P>(
     store: &'a S,
     options: &MatcherOptions,
+    profile: &P,
 ) -> Result<MatcherResponse<'a>, MatcherError>
 where
     S: MatcherStore,
     S::CredentialRef: Clone + Eq + Hash,
+    P: Profile,
+    P::Error: Into<ProfileError>,
 {
     diagnostics::begin();
     diagnostics::set_level(store.log_level());
-    let request: DcApiRequest = match serde_json::from_str(request_json) {
+    let request_json = get_request_string();
+    let request: DcApiRequest = match serde_json::from_str(&request_json) {
         Ok(request) => request,
         Err(err) => {
             let error = MatcherError::InvalidRequestJson(err);
@@ -51,40 +56,24 @@ where
             return Err(error);
         }
     };
-    let result = match_dc_api_request_value_impl(&request, store, options);
+    let result = match_dc_api_request_value_impl(&request, store, options, profile);
     if let Err(err) = &result {
         err.error();
     }
     result
 }
 
-/// Matches an already decoded DC API request object.
-pub fn match_dc_api_request_value<'a, S>(
-    request: &'a DcApiRequest,
-    store: &'a S,
-    options: &MatcherOptions,
-) -> Result<MatcherResponse<'a>, MatcherError>
-where
-    S: MatcherStore,
-    S::CredentialRef: Clone + Eq + Hash,
-{
-    diagnostics::begin();
-    diagnostics::set_level(store.log_level());
-    let result = match_dc_api_request_value_impl(request, store, options);
-    if let Err(err) = &result {
-        err.error();
-    }
-    result
-}
-
-fn match_dc_api_request_value_impl<'a, S>(
+fn match_dc_api_request_value_impl<'a, S, P>(
     request: &DcApiRequest,
     store: &'a S,
     options: &MatcherOptions,
+    profile: &P,
 ) -> Result<MatcherResponse<'a>, MatcherError>
 where
     S: MatcherStore,
     S::CredentialRef: Clone + Eq + Hash,
+    P: Profile,
+    P::Error: Into<ProfileError>,
 {
     let vp_config = store.openid4vp_config();
     let vci_config = store.openid4vci_config();
@@ -106,15 +95,30 @@ where
                     store,
                     &vp_config,
                     options,
-                )?;
-                response.results.extend(result.results);
+                    profile,
+                );
+                match result {
+                    Ok(result) => response.results.extend(result.results),
+                    Err(MatcherError::Profile(err)) => {
+                        err.error();
+                        return Ok(MatcherResponse::new());
+                    }
+                    Err(err) => return Err(err),
+                }
             }
             PROTOCOL_OPENID4VCI => {
                 if !vci_config.enabled {
                     continue;
                 }
-                let result = match_openid4vci_request(&item.data, &vci_config)?;
-                response.results.extend(result.results);
+                let result = match_openid4vci_request(&item.data, &vci_config, profile);
+                match result {
+                    Ok(result) => response.results.extend(result.results),
+                    Err(MatcherError::Profile(err)) => {
+                        err.error();
+                        return Ok(MatcherResponse::new());
+                    }
+                    Err(err) => return Err(err),
+                }
             }
             _ => {}
         }
@@ -123,17 +127,20 @@ where
     Ok(response)
 }
 
-fn match_openid4vp_request<'s, S>(
+fn match_openid4vp_request<'s, S, P>(
     request_index: usize,
     protocol: &str,
     data: &RequestData,
     store: &'s S,
     config: &OpenId4VpConfig,
     options: &MatcherOptions,
+    profile: &P,
 ) -> Result<MatcherResponse<'s>, MatcherError>
 where
     S: MatcherStore,
     S::CredentialRef: Clone + Eq + Hash,
+    P: Profile,
+    P::Error: Into<ProfileError>,
 {
     let is_signed_protocol = matches!(
         protocol,
@@ -161,17 +168,9 @@ where
     } else if is_signed_protocol && let Value::String(raw) = &value {
         value = decode_openid4vp_signed_payload(protocol, raw)?;
     }
-    let response_mode = value
-        .as_object()
-        .and_then(|obj| obj.get("response_mode"))
-        .and_then(Value::as_str);
-    if response_mode == Some("dc_api.jwt") && !config.allow_response_mode_jwt {
-        return Ok(MatcherResponse::new());
-    }
-
     let scope_present = value.as_object().and_then(|obj| obj.get("scope")).is_some();
 
-    let request: OpenId4VpRequest = serde_json::from_value(value.clone()).map_err(|err| {
+    let mut request: OpenId4VpRequest = serde_json::from_value(value.clone()).map_err(|err| {
         if protocol == PROTOCOL_OPENID4VP_V1_SIGNED || protocol == PROTOCOL_OPENID4VP_V1_MULTISIGNED
         {
             MatcherError::InvalidOpenId4Vp(OpenId4VpError::SignedPayloadNotSupported {
@@ -182,10 +181,15 @@ where
             MatcherError::InvalidOpenId4Vp(OpenId4VpError::Json { source: err })
         }
     })?;
+    request = apply_openid4vp_profile(profile, protocol, request)?;
 
     let mut response = MatcherResponse::new();
 
-    let dcql_query = match request.dcql_query.as_ref() {
+    if request.response_mode.as_deref() == Some("dc_api.jwt") && !config.allow_response_mode_jwt {
+        return Ok(response);
+    }
+
+    let dcql_query = match request.dcql_query.take() {
         Some(dcql_query) => {
             if !config.allow_dcql {
                 return Ok(response);
@@ -210,14 +214,14 @@ where
     }
     let transaction_data = decode_transaction_data(request.transaction_data.as_deref());
     let transaction_data = if let Some(data) = transaction_data {
-        ensure_transaction_data_satisfiable(dcql_query, data.as_slice())
+        ensure_transaction_data_satisfiable(&dcql_query, data.as_slice())
             .map_err(MatcherError::InvalidOpenId4Vp)?;
         Some(data)
     } else {
         None
     };
     let plan = match dcapi_dcql::plan_selection(
-        dcql_query,
+        &dcql_query,
         transaction_data.as_deref(),
         store,
         &options.dcql,
@@ -258,6 +262,33 @@ fn decode_openid4vp_request_object(
     }
 }
 
+fn apply_openid4vp_profile<P>(
+    profile: &P,
+    protocol: &str,
+    request: OpenId4VpRequest,
+) -> Result<OpenId4VpRequest, MatcherError>
+where
+    P: Profile,
+    P::Error: Into<ProfileError>,
+{
+    profile
+        .apply_openid4vp(protocol, request)
+        .map_err(|err| MatcherError::Profile(err.into()))
+}
+
+fn apply_openid4vci_profile<P>(
+    profile: &P,
+    request: OpenId4VciRequest,
+) -> Result<OpenId4VciRequest, MatcherError>
+where
+    P: Profile,
+    P::Error: Into<ProfileError>,
+{
+    profile
+        .apply_openid4vci(request)
+        .map_err(|err| MatcherError::Profile(err.into()))
+}
+
 fn decode_openid4vp_signed_payload(protocol: &str, jwt: &str) -> Result<Value, MatcherError> {
     let mut parts = jwt.split('.');
     let _ = parts.next();
@@ -273,10 +304,15 @@ fn decode_openid4vp_signed_payload(protocol: &str, jwt: &str) -> Result<Value, M
     })
 }
 
-fn match_openid4vci_request<'s>(
+fn match_openid4vci_request<'s, P>(
     data: &RequestData,
     config: &OpenId4VciConfig,
-) -> Result<MatcherResponse<'s>, MatcherError> {
+    profile: &P,
+) -> Result<MatcherResponse<'s>, MatcherError>
+where
+    P: Profile,
+    P::Error: Into<ProfileError>,
+{
     if !config.allow_credential_offer {
         return Ok(MatcherResponse::new());
     }
@@ -284,6 +320,7 @@ fn match_openid4vci_request<'s>(
         .to_value()
         .map_err(|err| MatcherError::InvalidRequestData(RequestDataError::Json { source: err }))?;
     let request = decode_openid4vci_request(&value)?;
+    let request = apply_openid4vci_profile(profile, request)?;
     if request.credential_offer.is_some() && request.credential_offer_uri.is_some() {
         return Err(MatcherError::InvalidOpenId4Vci(
             OpenId4VciError::CredentialOfferConflict,
@@ -699,7 +736,7 @@ fn ensure_transaction_data_satisfiable(
                 }
                 continue;
             };
-            if query_cred.format() == Some("dc+sd-jwt")
+            if query_cred.format() == CredentialFormat::DcSdJwt
                 && query_cred.require_cryptographic_holder_binding() == Some(false)
             {
                 if first_error.is_none() {

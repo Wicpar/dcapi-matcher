@@ -18,10 +18,11 @@ entry/set structures.
 
 ## Main API
 
-- `match_dc_api_request(request_json, store, options)`
+- `match_dc_api_request(store, options, profile)` (reads the DC API request JSON from Credman)
 - `MatcherStore` (your package adapter trait)
 - `MatcherResponse` (owned response; apply with `apply()`)
 - `diagnostics` (collect and render execution diagnostics as Credman entries)
+- `Profile` (request-level compliance hooks; use `DefaultProfile` or `HaipProfile`)
 
 ## Package Decode Helpers
 
@@ -40,14 +41,14 @@ For each candidate credential, metadata passed to Credman includes only:
 credential set (`dcapi:diagnostics`).
 
 - Scope lifecycle:
-  - `match_dc_api_request` and `match_dc_api_request_value` clear diagnostics at the start of matching.
+  - `match_dc_api_request` clears diagnostics at the start of matching.
   - the `#[dcapi_matcher]` macro flushes diagnostics at the end, after your matcher function returns (or panics).
 - Severity filtering:
   - levels are `Trace`, `Debug`, `Info`, `Warn`, `Error`.
   - logging is disabled unless you call `diagnostics::set_level(...)` (for example via `MatcherStore::log_level`).
 - Automatic recording:
-  - matcher framework errors returned by `match_dc_api_request` (and package decode helpers)
-    are recorded automatically.
+  - matcher framework errors returned by `match_dc_api_request`
+    (and package decode helpers) are recorded automatically.
   - panics caught by `#[dcapi_matcher]` are recorded as error diagnostics.
 - Manual recording:
   - use `diagnostics::trace/debug/info/warn/error` to add app-specific diagnostics.

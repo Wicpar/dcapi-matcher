@@ -2,7 +2,7 @@ use crate::models::{
     ClaimsQuery, CredentialQuery, CredentialSetQuery, DcqlQuery, Meta, TransactionData,
     TrustedAuthority,
 };
-use crate::path::{ClaimsPathPointer, PathElement, is_mdoc_path};
+use crate::path::{ClaimsPathPointer, PathElement};
 use serde::{Deserialize, Serialize};
 use crate::store::{CredentialFormat, CredentialStore, ValueMatch};
 use std::collections::{BTreeMap, BTreeSet};
@@ -137,8 +137,6 @@ where
     S: CredentialStore,
     S::CredentialRef: Clone,
 {
-    validate_query(query, transaction_data)?;
-
     let mut matches_by_id = BTreeMap::new();
     let mut query_by_id = BTreeMap::new();
     for credential_query in &query.credentials {
@@ -240,241 +238,6 @@ where
     Ok(SelectionPlan { alternatives })
 }
 
-fn validate_query(
-    query: &DcqlQuery,
-    transaction_data: Option<&[TransactionData]>,
-) -> Result<(), PlanError> {
-    // Strict upfront validation avoids ambiguous planner behavior and keeps failures explicit.
-    if query.credentials.is_empty() {
-        return Err(PlanError::InvalidQuery(
-            "dcql_query.credentials must contain at least one credential query".to_string(),
-        ));
-    }
-
-    if query
-        .credential_sets
-        .as_ref()
-        .is_some_and(|credential_sets| credential_sets.is_empty())
-    {
-        return Err(PlanError::InvalidQuery(
-            "dcql_query.credential_sets must be non-empty when provided".to_string(),
-        ));
-    }
-
-    let mut credential_ids = BTreeSet::new();
-    let mut known_credentials_by_id = BTreeMap::new();
-
-    for credential in &query.credentials {
-        if credential.is_unknown() {
-            return Err(PlanError::InvalidQuery(
-                "unsupported credential format in dcql_query.credentials entry".to_string(),
-            ));
-        }
-
-        let query_id = credential.id().ok_or_else(|| {
-            PlanError::InvalidQuery(
-                "dcql_query.credentials[].id must be present and non-empty".to_string(),
-            )
-        })?;
-        if !is_valid_id(query_id) {
-            return Err(PlanError::InvalidQuery(format!(
-                "invalid credential id: {query_id}"
-            )));
-        }
-        if !credential_ids.insert(query_id.to_owned()) {
-            return Err(PlanError::InvalidQuery(format!(
-                "duplicate credential id: {query_id}"
-            )));
-        }
-
-        match credential.meta() {
-            Some(Meta::IsoMdoc(meta)) => {
-                if meta.doctype_value().is_empty() {
-                    return Err(PlanError::InvalidQuery(format!(
-                        "empty mso_mdoc doctype_value: {query_id}"
-                    )));
-                }
-            }
-            Some(Meta::SdJwtVc(meta)) => {
-                if meta.vct_values().is_empty() {
-                    return Err(PlanError::InvalidQuery(format!(
-                        "empty dc+sd-jwt vct_values: {query_id}"
-                    )));
-                }
-                if meta.vct_values().iter().any(|value| value.is_empty()) {
-                    return Err(PlanError::InvalidQuery(format!(
-                        "dc+sd-jwt vct_values contains empty value: {query_id}"
-                    )));
-                }
-            }
-            None => {
-                return Err(PlanError::InvalidQuery(
-                    "unsupported credential format in dcql_query.credentials entry".to_string(),
-                ));
-            }
-        }
-
-        if let Some(trusted_authorities) = credential.trusted_authorities() {
-            if trusted_authorities.is_empty() {
-                return Err(PlanError::InvalidQuery(format!(
-                    "trusted_authorities empty: {query_id}"
-                )));
-            }
-            for authority in trusted_authorities {
-                if authority.r#type.is_empty() {
-                    return Err(PlanError::InvalidQuery(format!(
-                        "trusted_authorities type empty: {query_id}"
-                    )));
-                }
-                if authority.values.is_empty() {
-                    return Err(PlanError::InvalidQuery(format!(
-                        "trusted_authorities values empty: {query_id}"
-                    )));
-                }
-            }
-        }
-
-        if credential.claims().is_some_and(|claims| claims.is_empty()) {
-            return Err(PlanError::InvalidQuery(format!("claims empty: {query_id}")));
-        }
-
-        if credential
-            .claim_sets()
-            .is_some_and(|claim_sets| claim_sets.is_empty())
-        {
-            return Err(PlanError::InvalidQuery(format!(
-                "claim_sets empty: {query_id}"
-            )));
-        }
-
-        if credential.claim_sets().is_some() && credential.claims().is_none() {
-            return Err(PlanError::InvalidQuery(format!(
-                "claim_sets without claims: {query_id}"
-            )));
-        }
-
-        let claim_sets_present = credential.claim_sets().is_some();
-        let mut claim_ids = BTreeSet::new();
-        if let Some(claims) = credential.claims() {
-            for claim in claims {
-                if claim.path.is_empty() {
-                    return Err(PlanError::InvalidQuery(format!(
-                        "empty claim path: {query_id}"
-                    )));
-                }
-                if claim
-                    .values
-                    .as_ref()
-                    .is_some_and(|values| values.is_empty())
-                {
-                    return Err(PlanError::InvalidQuery(format!(
-                        "empty claim values: {query_id}"
-                    )));
-                }
-                let Some(id) = claim.id() else {
-                    if claim_sets_present {
-                        return Err(PlanError::InvalidQuery(format!(
-                            "claims missing id: {query_id}"
-                        )));
-                    }
-                    continue;
-                };
-                if !is_valid_id(id) {
-                    return Err(PlanError::InvalidQuery(format!(
-                        "invalid claim id: {query_id}.{id}"
-                    )));
-                }
-                if !claim_ids.insert(id.to_owned()) {
-                    return Err(PlanError::InvalidQuery(format!(
-                        "duplicate claim id: {query_id}.{id}"
-                    )));
-                }
-            }
-        }
-
-        if let Some(claim_sets) = credential.claim_sets() {
-            for option in claim_sets {
-                if option.is_empty() {
-                    return Err(PlanError::InvalidQuery(format!(
-                        "empty claim_set option: {query_id}"
-                    )));
-                }
-                for claim_id in option {
-                    if !claim_ids.contains(claim_id) {
-                        return Err(PlanError::InvalidQuery(format!(
-                            "claim_set unknown claim id: {query_id}.{claim_id}"
-                        )));
-                    }
-                }
-            }
-        }
-
-        known_credentials_by_id.insert(query_id.to_owned(), credential);
-    }
-
-    if let Some(credential_sets) = &query.credential_sets {
-        for set in credential_sets {
-            if set.options.is_empty() {
-                return Err(PlanError::InvalidQuery(
-                    "dcql_query.credential_sets[].options must be non-empty".to_string(),
-                ));
-            }
-            for option in &set.options {
-                if option.is_empty() {
-                    return Err(PlanError::InvalidQuery(
-                        "dcql_query.credential_sets[].options[] must be non-empty".to_string(),
-                    ));
-                }
-                for credential_id in option {
-                    if !credential_ids.contains(credential_id) {
-                        return Err(PlanError::InvalidQuery(format!(
-                            "credential_sets unknown credential id: {credential_id}"
-                        )));
-                    }
-                }
-            }
-        }
-    }
-
-    if let Some(transaction_data) = transaction_data {
-        for data in transaction_data {
-            if data.data_type.r#type.is_empty() {
-                return Err(PlanError::InvalidQuery(
-                    "transaction_data[].type must be non-empty".to_string(),
-                ));
-            }
-            if data.credential_ids.is_empty() {
-                return Err(PlanError::InvalidQuery(
-                    "transaction_data[].credential_ids must be non-empty".to_string(),
-                ));
-            }
-            for credential_id in &data.credential_ids {
-                let Some(credential) = known_credentials_by_id.get(credential_id) else {
-                    return Err(PlanError::InvalidQuery(format!(
-                        "transaction_data unknown credential_id: {credential_id}"
-                    )));
-                };
-                if credential.format() == Some("dc+sd-jwt")
-                    && credential.require_cryptographic_holder_binding() == Some(false)
-                {
-                    return Err(PlanError::InvalidQuery(format!(
-                        "transaction_data requires holder binding: {credential_id}"
-                    )));
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn is_valid_id(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-}
-
 fn match_query<S>(
     store: &S,
     query: &CredentialQuery,
@@ -483,41 +246,18 @@ where
     S: CredentialStore,
     S::CredentialRef: Clone,
 {
-    let Some(format) = query.format() else {
-        return Err(PlanError::InvalidQuery(
-            "unsupported credential format in dcql_query.credentials entry".to_string(),
-        ));
-    };
-    let Some(query_id) = query.id() else {
-        return Err(PlanError::InvalidQuery(
-            "dcql_query.credentials[].id must be present and non-empty".to_string(),
-        ));
-    };
-    let Some(meta) = query.meta() else {
-        return Err(PlanError::InvalidQuery(
-            "unsupported credential format in dcql_query.credentials entry".to_string(),
-        ));
-    };
-
-    let expected_format = CredentialFormat::from_query_format(format);
-    let mut candidates = Vec::new();
-    for cred in store.list_credentials(Some(format)) {
-        if store.format(&cred) != expected_format {
-            continue;
-        }
-        if !meta_matches(store, &cred, query) {
-            continue;
-        }
-        candidates.push(cred);
-    }
+    let format = query.format();
+    let common = query.common().ok_or(PlanError::Unsatisfied)?;
+    let meta = query.meta().ok_or(PlanError::Unsatisfied)?;
+    let candidates = store.list_credentials(Some(format)).into_iter().filter(|cred|meta_matches(store, &cred, query)).collect();
 
     Ok(QueryMatches {
-        id: query_id.to_owned(),
-        format: expected_format,
+        id: common.id.clone(),
+        format,
         meta,
-        multiple: query.multiple().unwrap_or(false),
-        require_holder_binding: query.require_cryptographic_holder_binding().unwrap_or(true),
-        trusted_authorities: query.trusted_authorities().map(|v| v.to_vec()),
+        multiple: common.multiple.unwrap_or(false),
+        require_holder_binding: common.require_cryptographic_holder_binding.unwrap_or(true),
+        trusted_authorities: common.trusted_authorities.clone(),
         selected_claims: Vec::new(),
         credentials: candidates,
     })
@@ -527,10 +267,6 @@ fn meta_matches<S>(store: &S, cred: &S::CredentialRef, query: &CredentialQuery) 
 where
     S: CredentialStore,
 {
-    let Some(format) = query.format() else {
-        return false;
-    };
-
     if query
         .trusted_authorities()
         .is_some_and(|trusted_authorities| {
@@ -541,15 +277,15 @@ where
     }
 
     if query.require_cryptographic_holder_binding().unwrap_or(true)
-        && format == "dc+sd-jwt"
+        && query.format() == CredentialFormat::DcSdJwt
         && !store.supports_holder_binding(cred)
     {
         return false;
     }
 
     match query.meta() {
-        Some(Meta::IsoMdoc(meta)) => store.has_doctype(cred, meta.doctype_value()),
-        Some(Meta::SdJwtVc(meta)) => meta.vct_values().iter().any(|v| store.has_vct(cred, v)),
+        Some(Meta::IsoMdoc(meta)) => store.has_doctype(cred, &meta.doctype_value),
+        Some(Meta::SdJwtVc(meta)) => meta.vct_values.iter().any(|v| store.has_vct(cred, v)),
         None => false,
     }
 }
@@ -568,9 +304,8 @@ where
     };
     let claims = dedupe_claims_by_path(claims);
 
-    let is_mdoc = query.is_mdoc();
     let Some(claim_sets) = query.claim_sets() else {
-        let filtered = filter_candidates(store, is_mdoc, &claims, &candidates);
+        let filtered = filter_candidates(store, &claims, &candidates);
         return Ok((claims, filtered));
     };
 
@@ -594,7 +329,7 @@ where
         if selected.is_empty() {
             continue;
         }
-        let filtered = filter_candidates(store, is_mdoc, &selected, &candidates);
+        let filtered = filter_candidates(store, &selected, &candidates);
         if !filtered.is_empty() {
             return Ok((selected, filtered));
         }
@@ -625,7 +360,6 @@ fn map_claims_by_id<'a>(
 
 fn filter_candidates<S>(
     store: &S,
-    is_mdoc: bool,
     claims: &[ClaimsQuery],
     candidates: &[S::CredentialRef],
 ) -> Vec<S::CredentialRef>
@@ -638,7 +372,7 @@ where
         .filter(|cred| {
             claims
                 .iter()
-                .all(|claim| claim_matches(store, is_mdoc, cred, claim))
+                .all(|claim| claim_matches(store, cred, claim))
         })
         .cloned()
         .collect()
@@ -667,12 +401,10 @@ where
         return Some(Vec::new());
     };
     let claims = dedupe_claims_by_path(claims);
-
-    let is_mdoc = query.is_mdoc();
     let Some(claim_sets) = query.claim_sets() else {
         return claims
             .iter()
-            .all(|claim| claim_matches(store, is_mdoc, cred, claim))
+            .all(|claim| claim_matches(store, cred, claim))
             .then_some(claims);
     };
 
@@ -693,7 +425,7 @@ where
         }
         if selected
             .iter()
-            .all(|claim| claim_matches(store, is_mdoc, cred, claim))
+            .all(|claim| claim_matches(store, cred, claim))
         {
             return Some(selected);
         }
@@ -702,15 +434,11 @@ where
     None
 }
 
-fn claim_matches<S>(store: &S, is_mdoc: bool, cred: &S::CredentialRef, claim: &ClaimsQuery) -> bool
+fn claim_matches<S>(store: &S, cred: &S::CredentialRef, claim: &ClaimsQuery) -> bool
 where
     S: CredentialStore + ?Sized,
 {
     if claim.path.is_empty() {
-        return false;
-    }
-
-    if is_mdoc && !is_mdoc_path(&claim.path) {
         return false;
     }
 

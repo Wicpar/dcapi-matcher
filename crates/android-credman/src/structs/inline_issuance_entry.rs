@@ -47,7 +47,7 @@ fn normalize(value: Cow<str>) -> Cow<str> {
 
 impl<'a> CredmanApply<()> for InlineIssuanceEntry<'a> {
     fn apply(&self, _: ()) {
-        let host = default_credman();
+        let host = credman();
         host.add_inline_issuance_entry(&InlineIssuanceEntryRequest {
             cred_id: self.cred_id.as_ref(),
             icon: self.icon.as_ref().map(|icon| icon.as_ref()),

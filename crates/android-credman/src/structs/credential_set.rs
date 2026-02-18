@@ -52,7 +52,7 @@ impl<'a> CredmanApply<()> for CredentialSet<'a> {
         if self.slots.is_empty() {
             return;
         }
-        let host = default_credman();
+        let host = credman();
         if let Some(v2) = host.as_v2() {
             v2.add_entry_set(&EntrySetRequest {
                 set_id: self.set_id.as_ref(),

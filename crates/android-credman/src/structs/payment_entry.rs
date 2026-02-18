@@ -108,7 +108,7 @@ fn normalize<'a>(value: Cow<'a, str>) -> Cow<'a, str> {
 
 impl<'a> CredmanApply<()> for PaymentEntry<'a> {
     fn apply(&self, _: ()) {
-        let host = default_credman();
+        let host = credman();
         host.add_payment_entry(&PaymentEntryRequest {
             cred_id: self.cred_id.as_ref(),
             merchant_name: self.merchant_name.as_ref(),
@@ -134,7 +134,7 @@ impl<'a> CredmanApply<()> for PaymentEntry<'a> {
 
 impl<'a> CredmanApply<(&'a str, i32)> for PaymentEntry<'a> {
     fn apply(&self, (set_id, set_index): (&'a str, i32)) {
-        let host = default_credman();
+        let host = credman();
         if let Some(v3) = host.as_v3() {
             v3.add_payment_entry_to_set_v2(&PaymentEntryToSetV2Request {
                 cred_id: self.cred_id.as_ref(),

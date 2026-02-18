@@ -1,4 +1,4 @@
-use android_credman::CredmanApplyExt;
+use android_credman::{CredmanRender, CredentialReader};
 use android_credman::test_shim::{self, DisplayEvent};
 use base64::Engine;
 use dcapi_dcql::{
@@ -6,10 +6,12 @@ use dcapi_dcql::{
     TransactionDataType, ValueMatch,
 };
 use dcapi_matcher::{
-    CredentialEntry, Field, MatcherError, MatcherOptions, MatcherResult, MatcherStore,
+    CredentialEntry, DefaultProfile, Field, MatcherError, MatcherOptions, MatcherResult,
+    MatcherStore,
     PROTOCOL_OPENID4VCI, PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
     PROTOCOL_OPENID4VP_V1_UNSIGNED, Ts12ClaimMetadata, Ts12LocalizedLabel, Ts12LocalizedValue,
-    Ts12PaymentSummary, Ts12TransactionMetadata, decode_json_package, match_dc_api_request,
+    Ts12PaymentSummary, Ts12TransactionMetadata, decode_json_package,
+    match_dc_api_request as match_dc_api_request_internal,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -18,6 +20,22 @@ use std::collections::HashSet;
 
 const TS12_TYPE_PAYMENT: &str = "urn:eudi:sca:payment:1";
 const TS12_TYPE_GENERIC: &str = "urn:eudi:sca:generic:1";
+
+fn match_dc_api_request<'a>(
+    request: &str,
+    store: &'a impl MatcherStore,
+    options: &MatcherOptions,
+) -> Result<dcapi_matcher::MatcherResponse<'a>, MatcherError> {
+    test_shim::set_request(request.as_bytes());
+    match_dc_api_request_internal(store, options, &DefaultProfile)
+}
+
+fn unsupported_reader<T>() -> Result<T, std::io::Error> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "from_reader is not supported in tests",
+    ))
+}
 
 #[derive(Clone)]
 struct TestCredential {
@@ -31,7 +49,6 @@ struct TestCredential {
     claims: Value,
     transaction_data_types: Vec<TransactionDataType>,
     ts12_metadata: Vec<Ts12TransactionMetadata>,
-    credential_metadata: Option<Value>,
 }
 
 struct TestStore {
@@ -54,19 +71,18 @@ impl TestStore {
 
 impl CredentialStore for TestStore {
     type CredentialRef = usize;
+    type ReadResult = Result<Self, std::io::Error>;
 
-    fn list_credentials(&self, format: Option<&str>) -> Vec<Self::CredentialRef> {
+    fn from_reader(_reader: CredentialReader) -> Self::ReadResult {
+        unsupported_reader()
+    }
+
+    fn list_credentials(&self, format: Option<CredentialFormat>) -> Vec<Self::CredentialRef> {
         self.credentials
             .iter()
             .enumerate()
             .filter(|(_, credential)| {
-                format.is_none_or(|requested| {
-                    matches!(
-                        (requested, &credential.format),
-                        ("dc+sd-jwt", CredentialFormat::DcSdJwt)
-                            | ("mso_mdoc", CredentialFormat::MsoMdoc)
-                    )
-                })
+                format.map(|format| credential.format == format).unwrap_or(true)
             })
             .map(|(idx, _)| idx)
             .collect()
@@ -417,7 +433,6 @@ fn test_store() -> TestStore {
                 },
             ],
             ts12_metadata: vec![ts12_payment_metadata(), ts12_generic_metadata()],
-            credential_metadata: Some(json!({"k0": "v0"})),
         },
         TestCredential {
             id: "pid-2".to_string(),
@@ -430,7 +445,6 @@ fn test_store() -> TestStore {
             claims: json!({"name": "Bob", "age": 40}),
             transaction_data_types: vec![],
             ts12_metadata: vec![],
-            credential_metadata: None,
         },
         TestCredential {
             id: "mdl-1".to_string(),
@@ -446,7 +460,6 @@ fn test_store() -> TestStore {
             claims: json!({"org.iso.18013.5.1": {"family_name": "Doe"}}),
             transaction_data_types: vec![],
             ts12_metadata: vec![],
-            credential_metadata: None,
         },
     ])
 }
@@ -457,8 +470,13 @@ struct VciStore {
 
 impl CredentialStore for VciStore {
     type CredentialRef = ();
+    type ReadResult = Result<Self, std::io::Error>;
 
-    fn list_credentials(&self, _format: Option<&str>) -> Vec<Self::CredentialRef> {
+    fn from_reader(_reader: CredentialReader) -> Self::ReadResult {
+        unsupported_reader()
+    }
+
+    fn list_credentials(&self, _format: Option<CredentialFormat>) -> Vec<Self::CredentialRef> {
         Vec::new()
     }
 
@@ -533,8 +551,13 @@ struct VpOverride<'a> {
 
 impl<'a> CredentialStore for VpOverride<'a> {
     type CredentialRef = usize;
+    type ReadResult = Result<Self, std::io::Error>;
 
-    fn list_credentials(&self, format: Option<&str>) -> Vec<Self::CredentialRef> {
+    fn from_reader(_reader: CredentialReader) -> Self::ReadResult {
+        unsupported_reader()
+    }
+
+    fn list_credentials(&self, format: Option<CredentialFormat>) -> Vec<Self::CredentialRef> {
         self.inner.list_credentials(format)
     }
 
@@ -807,7 +830,7 @@ fn openid4vp_ts12_payment_renders_payment_entry_with_fields() {
     assert!(!entry_fields(first).is_empty());
 
     let _ = test_shim::take_display();
-    response.apply();
+    response.render();
     let events = test_shim::take_display().events;
     assert!(events.iter().any(|event| matches!(
         event,
@@ -1139,11 +1162,16 @@ fn openid4vci_direct_offer_object_is_supported() {
     .to_string();
 
     let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
-    let MatcherResult::Group(set) = &response.results[0] else {
-        panic!("expected set");
-    };
-    assert_eq!(set.slots.len(), 1);
-    assert_eq!(entry_cred_id(&set.slots[0].alternatives[0]), "pid_config");
+    let entries = response
+        .results
+        .iter()
+        .filter_map(|result| match result {
+            MatcherResult::InlineIssuance(entry) => Some(entry),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].cred_id.as_ref(), "pid_config");
 }
 
 #[test]
@@ -1171,10 +1199,16 @@ fn openid4vci_offer_wrapper_and_metadata_configuration_are_supported() {
     .to_string();
 
     let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
-    let MatcherResult::Group(set) = &response.results[0] else {
-        panic!("expected set");
-    };
-    assert_eq!(entry_cred_id(&set.slots[0].alternatives[0]), "pid_config");
+    let entries = response
+        .results
+        .iter()
+        .filter_map(|result| match result {
+            MatcherResult::InlineIssuance(entry) => Some(entry),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].cred_id.as_ref(), "pid_config");
 }
 
 #[test]
@@ -1255,13 +1289,14 @@ fn openid4vci_configuration_order_is_preserved_in_slots() {
     .to_string();
 
     let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
-    let MatcherResult::Group(set) = &response.results[0] else {
-        panic!("expected set");
-    };
     assert_eq!(
-        set.slots
+        response
+            .results
             .iter()
-            .map(|slot| entry_cred_id(&slot.alternatives[0]).to_string())
+            .filter_map(|result| match result {
+                MatcherResult::InlineIssuance(entry) => Some(entry.cred_id.as_ref().to_string()),
+                _ => None,
+            })
             .collect::<Vec<_>>(),
         vec!["mdl_config".to_string(), "pid_config".to_string()]
     );
@@ -1423,7 +1458,12 @@ fn matcher_options_can_disable_openid4vci_processing() {
 
     impl<'a> CredentialStore for VciDisabled<'a> {
         type CredentialRef = usize;
-        fn list_credentials(&self, format: Option<&str>) -> Vec<Self::CredentialRef> {
+        type ReadResult = Result<Self, std::io::Error>;
+
+        fn from_reader(_reader: CredentialReader) -> Self::ReadResult {
+            unsupported_reader()
+        }
+        fn list_credentials(&self, format: Option<CredentialFormat>) -> Vec<Self::CredentialRef> {
             self.inner.list_credentials(format)
         }
         fn format(&self, cred: &Self::CredentialRef) -> CredentialFormat {

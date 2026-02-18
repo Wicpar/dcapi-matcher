@@ -3,7 +3,7 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use android_credman::{
-    CredentialEntry, CredentialSet, CredmanApplyExt, InlineIssuanceEntry, StringIdEntry,
+    CredentialEntry, CredentialSet, CredmanRender, InlineIssuanceEntry, StringIdEntry,
 };
 use crate::error::format_error_chain;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -164,7 +164,7 @@ pub fn flush_and_apply() {
         }
         CredentialEntry::StringId(cred)
     }));
-    set.apply();
+    set.render();
 
     for entry in &entries {
         let id = next_id();
@@ -173,7 +173,7 @@ pub fn flush_and_apply() {
         if !entry.message.is_empty() {
             inline.subtitle = Some(entry.message.as_str().into());
         }
-        inline.apply();
+        inline.render();
     }
 }
 

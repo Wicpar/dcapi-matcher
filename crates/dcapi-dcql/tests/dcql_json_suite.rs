@@ -1,12 +1,13 @@
 use dcapi_dcql::{
-    ClaimValue, CredentialFormat, CredentialSetOptionMode, CredentialStore, DcqlQuery,
-    OptionalCredentialSetsMode, PlanError, PlanOptions, SelectionPlan, TransactionData,
+    ClaimValue, CredentialFormat, CredentialReader, CredentialSetOptionMode, CredentialStore,
+    DcqlQuery, OptionalCredentialSetsMode, PlanError, PlanOptions, SelectionPlan, TransactionData,
     TransactionDataType, TrustedAuthority, ValueMatch, plan_selection,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 // -----------------------------
@@ -22,7 +23,7 @@ struct CredentialPackage {
 #[derive(Debug, Clone, Deserialize)]
 struct JsonCredential {
     id: String,
-    format: String,
+    format: CredentialFormat,
 
     #[serde(default)]
     holder_binding: bool,
@@ -79,8 +80,17 @@ impl JsonStore {
 
 impl CredentialStore for JsonStore {
     type CredentialRef = String;
+    type ReadResult = Result<Self, std::io::Error>;
 
-    fn list_credentials(&self, format: Option<&str>) -> Vec<Self::CredentialRef> {
+    fn from_reader(mut reader: CredentialReader) -> Self::ReadResult {
+        let mut buffer = Vec::with_capacity(reader.len() as usize);
+        reader.read_to_end(&mut buffer)?;
+        let package: CredentialPackage = serde_json::from_slice(&buffer)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+        Ok(Self::from_package(package))
+    }
+
+    fn list_credentials(&self, format: Option<CredentialFormat>) -> Vec<Self::CredentialRef> {
         self.creds
             .values()
             .filter(|c| format.map(|f| c.format == f).unwrap_or(true))
@@ -89,7 +99,7 @@ impl CredentialStore for JsonStore {
     }
 
     fn format(&self, cred: &Self::CredentialRef) -> CredentialFormat {
-        CredentialFormat::from_query_format(&self.get(cred).format)
+        self.get(cred).format
     }
 
     fn has_vct(&self, cred: &Self::CredentialRef, vct: &str) -> bool {

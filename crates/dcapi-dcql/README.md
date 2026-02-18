@@ -157,17 +157,16 @@ for (outer_idx, alternative) in plan.alternatives.iter().enumerate() {
   are rejected when present but empty.
 - `claim_sets` selects the first satisfiable option and filters candidates to it.
 - Duplicate claim paths are ignored (first occurrence wins).
-- `transaction_data` is passed separately from `DcqlQuery` and requires at least one
-  referenced credential id in each entry.
+- `transaction_data` is passed separately from `DcqlQuery`.
 - `transaction_data` may be empty; an empty array is ignored.
 - Transaction data compatibility semantics are delegated to `CredentialStore::can_sign_transaction_data`.
+- Unknown credential ids in `transaction_data` are ignored during assignment; entries that cannot
+  be assigned yield an Unsatisfied plan.
 - Output alternatives make transaction-data assignment explicit (`transaction_data[i] -> credential_id`)
   and pre-filter candidate credentials so entry choices remain independent inside one alternative.
 - For `dc+sd-jwt`, `meta.vct_values` is required and non-empty, and at least one value must match through
   `CredentialStore::has_vct`.
 - For `dc+sd-jwt`, holder binding defaults to required.
-- For `dc+sd-jwt`, transaction data cannot be used when
-  `require_cryptographic_holder_binding` is `false`.
 - For `mso_mdoc`, `meta.doctype_value` is required and must match.
 - Unknown credential query formats are rejected during validation.
 - `values` matching is strict: only `ValueMatch::Match` is accepted.

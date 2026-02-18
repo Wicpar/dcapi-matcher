@@ -6,6 +6,7 @@ readme = "README.md"
 
 [dependencies]
 android-credman-sys = { workspace = true }
+thiserror = { workspace = true }
 
 [features]
 test-shim = ["android-credman-sys/test-shim"]

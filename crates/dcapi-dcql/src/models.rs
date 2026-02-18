@@ -1,6 +1,7 @@
 use crate::path::ClaimsPathPointer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use crate::CredentialFormat;
 
 /// Core DCQL object from OpenID4VP.
 ///
@@ -43,6 +44,7 @@ pub enum CredentialQuery {
     Unknown,
 }
 
+
 /// Internal typed wrapper for the parsed `meta` object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Meta {
@@ -56,14 +58,7 @@ pub enum Meta {
 /// instead of causing hard parse failures.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IsoMdocMeta {
-    doctype_value: String,
-}
-
-impl IsoMdocMeta {
-    /// Required mdoc doctype constraint.
-    pub fn doctype_value(&self) -> &str {
-        self.doctype_value.as_str()
-    }
+    pub doctype_value: String,
 }
 
 /// `meta` members for `dc+sd-jwt`.
@@ -72,57 +67,39 @@ impl IsoMdocMeta {
 /// instead of causing hard parse failures.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SdJwtMeta {
-    vct_values: Vec<String>,
-}
-
-impl SdJwtMeta {
-    /// Allowed VCT values (and optionally inherited VCTs) for the requested credential.
-    pub fn vct_values(&self) -> &[String] {
-        self.vct_values.as_slice()
-    }
+    pub vct_values: Vec<String>,
 }
 
 /// Format-agnostic Credential Query members.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialQueryCommon {
-    id: String,
-    multiple: Option<bool>,
-    trusted_authorities: Option<Vec<TrustedAuthority>>,
-    require_cryptographic_holder_binding: Option<bool>,
-    claims: Option<Vec<ClaimsQuery>>,
-    claim_sets: Option<Vec<Vec<String>>>,
+    pub id: String,
+    pub multiple: Option<bool>,
+    pub trusted_authorities: Option<Vec<TrustedAuthority>>,
+    pub require_cryptographic_holder_binding: Option<bool>,
+    pub claims: Option<Vec<ClaimsQuery>>,
+    pub claim_sets: Option<Vec<Vec<String>>>,
 }
 
 impl CredentialQuery {
-    fn common(&self) -> Option<&CredentialQueryCommon> {
+    pub fn common(&self) -> Option<&CredentialQueryCommon> {
         match self {
             Self::MsoMdoc { common, .. } | Self::DcSdJwt { common, .. } => Some(common),
             Self::Unknown => None,
         }
     }
 
-    /// True if the request used an unknown credential format identifier.
-    pub fn is_unknown(&self) -> bool {
-        matches!(self, Self::Unknown)
-    }
-
-    /// Credential query id.
     pub fn id(&self) -> Option<&str> {
-        self.common().map(|common| common.id.as_str())
+        self.common().map(|it| &*it.id)
     }
 
     /// Normalized format string for supported formats.
-    pub fn format(&self) -> Option<&'static str> {
+    pub fn format(&self) -> CredentialFormat {
         match self {
-            Self::MsoMdoc { .. } => Some("mso_mdoc"),
-            Self::DcSdJwt { .. } => Some("dc+sd-jwt"),
-            Self::Unknown => None,
+            Self::MsoMdoc { .. } => CredentialFormat::MsoMdoc,
+            Self::DcSdJwt { .. } => CredentialFormat::DcSdJwt,
+            Self::Unknown => CredentialFormat::Unknown,
         }
-    }
-
-    /// True when this is an mdoc format query.
-    pub fn is_mdoc(&self) -> bool {
-        matches!(self, Self::MsoMdoc { .. })
     }
 
     /// Typed meta object for supported formats.
@@ -132,27 +109,6 @@ impl CredentialQuery {
             Self::DcSdJwt { meta, .. } => Some(Meta::SdJwtVc(meta.clone())),
             Self::Unknown => None,
         }
-    }
-
-    /// mdoc doctype constraint for supported mdoc queries.
-    pub fn doctype_value(&self) -> Option<&str> {
-        match self {
-            Self::MsoMdoc { meta, .. } => Some(meta.doctype_value.as_str()),
-            Self::DcSdJwt { .. } | Self::Unknown => None,
-        }
-    }
-
-    /// SD-JWT VCT constraints for supported SD-JWT queries.
-    pub fn vct_values(&self) -> Option<&[String]> {
-        match self {
-            Self::MsoMdoc { .. } | Self::Unknown => None,
-            Self::DcSdJwt { meta, .. } => Some(meta.vct_values.as_slice()),
-        }
-    }
-
-    /// Whether multiple credentials may satisfy this query.
-    pub fn multiple(&self) -> Option<bool> {
-        self.common().and_then(|common| common.multiple)
     }
 
     /// Trusted authority constraints.

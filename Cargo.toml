@@ -5,9 +5,7 @@ members = [
     "crates/aptitude-consortium-dcapi-matcher",
     "crates/dcapi-dcql",
     "crates/dcapi-matcher-macros",
-    "crates/dcapi-matcher",
-    "crates/dcapi-matcher/examples/cm-matcher-format",
-    "crates/dcapi-matcher/examples/ubique-matcher-format",
+    "crates/dcapi-matcher"
 ]
 resolver = "2"
 

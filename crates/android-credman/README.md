@@ -9,7 +9,7 @@ This crate provides ergonomic, mostly borrowed-data APIs over the raw matcher AB
 Use it to:
 - read verifier request and credential input streams,
 - build credential rows and groups in Rust structs,
-- emit results through a version-aware host facade (`default_credman`).
+- emit results through a version-aware host facade (`credman`).
 
 ## API Layers
 
