@@ -1,5 +1,5 @@
 use crate::config::{OpenId4VciConfig, OpenId4VpConfig};
-use crate::diagnostics::{self, ErrorExt};
+use crate::diagnostics::{self, DiagnosticContext, ErrorExt};
 use crate::error::{
     MatcherError, OpenId4VciError, OpenId4VpError, RequestDataError, TransactionDataDecodeError,
 };
@@ -11,6 +11,7 @@ use crate::models::{
 use crate::profile::{Profile, ProfileError};
 use crate::traits::{DcqlSelectionContext, MatcherStore};
 use crate::ts12;
+use alloc::boxed::Box;
 use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -21,6 +22,8 @@ use android_credman::{
 use android_credman::get_request_string;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use c8str::{C8Str, C8String, c8format};
+use core::ffi::CStr;
 use core::hash::Hash;
 use dcapi_dcql::{CredentialFormat, PathElement, PlanOptions, SelectionAlternative, TransactionData};
 use serde::de::DeserializeOwned;
@@ -98,7 +101,9 @@ where
                     profile,
                 );
                 match result {
-                    Ok(result) => response.results.extend(result.results),
+                    Ok(result) => {
+                        response = response.add_results(result.results.into_owned());
+                    }
                     Err(MatcherError::Profile(err)) => {
                         err.error();
                         return Ok(MatcherResponse::new());
@@ -110,15 +115,19 @@ where
                 if !vci_config.enabled {
                     continue;
                 }
+                diagnostics::set_context(DiagnosticContext::Vci);
                 let result = match_openid4vci_request(&item.data, &vci_config, profile);
                 match result {
-                    Ok(result) => response.results.extend(result.results),
+                    Ok(result) => {
+                        response = response.add_results(result.results.into_owned());
+                    }
                     Err(MatcherError::Profile(err)) => {
                         err.error();
                         return Ok(MatcherResponse::new());
                     }
                     Err(err) => return Err(err),
                 }
+                diagnostics::set_context(DiagnosticContext::Vp);
             }
             _ => {}
         }
@@ -433,16 +442,18 @@ fn build_vci_entry<'s>(
     configuration: Option<&Value>,
 ) -> Result<InlineIssuanceEntry<'s>, MatcherError> {
     let (title, subtitle, icon) = vci_display_from_configuration(configuration);
-    let cred_id = configuration_id.to_string();
-    let title = title.unwrap_or(configuration_id).to_string();
+    let cred_id = cstr_from_bytes(configuration_id.as_bytes());
+    let title = cstr_from_bytes(title.unwrap_or(configuration_id).as_bytes());
     let mut entry = InlineIssuanceEntry::new(cred_id, title);
     entry.subtitle = subtitle
-        .map(|value| Cow::Owned(value.to_string()))
+        .map(|value| cstr_from_bytes(value.as_bytes()))
         .or_else(|| {
             if credential_offer.credential_issuer.is_empty() {
                 None
             } else {
-                Some(Cow::Owned(credential_offer.credential_issuer.clone()))
+                Some(cstr_from_bytes(
+                    credential_offer.credential_issuer.as_bytes(),
+                ))
             }
         });
     if let Some(icon) = icon {
@@ -527,9 +538,8 @@ where
     S: MatcherStore,
     S::CredentialRef: Clone + Eq + Hash,
 {
-    let mut set = CredentialSet::new(format!(
-        "{protocol}:{request_index}:dcql:{alternative_index}"
-    ));
+    let set_id = leak_c8string(set_id_for_dcql(protocol, request_index, alternative_index));
+    let mut set = CredentialSet::new(set_id);
 
     for entry in &alternative.entries {
         let context = DcqlSelectionContext {
@@ -578,13 +588,12 @@ where
     let subtitle = store.credential_subtitle(cred);
     let disclaimer = store.credential_disclaimer(cred);
     let warning = store.credential_warning(cred);
-    let credential_id_str = credential_id;
     let ts12_display = ts12::build_display_for_context(
         store,
         cred,
-        credential_id_str,
+        credential_id.as_ref(),
         context,
-        store.preferred_locales(),
+        store.locales(),
     )?;
     let (ts12_fields, payment_summary) = match ts12_display {
         Some(display) => (display.transaction_fields, display.payment_summary),
@@ -595,8 +604,8 @@ where
         .into_iter()
         .map(|field| {
             Field::new(
-                field.display_name.into_owned(),
-                Some(field.display_value.into_owned()),
+                cstr_from_cow(field.display_name),
+                Some(cstr_from_cow(field.display_value)),
             )
         })
         .collect::<Vec<_>>();
@@ -612,42 +621,46 @@ where
             continue;
         };
         let value = store.get_credential_field_value(cred, &claim.path);
-        fields.push(Field::new(label, value));
+        fields.push(Field::new(
+            cstr_from_cow(label),
+            value.map(cstr_from_cow),
+        ));
     }
-    let metadata = build_metadata(context);
-    let metadata = metadata
-        .map(|value| serde_json::to_string(&value))
-        .transpose()
-        .map_err(|err| MatcherError::MetadataSerialization { source: err })?
-        .map(Cow::Owned);
+    let metadata = build_metadata(context)?;
+
+    let credential_id = cstr_from_cow(credential_id);
+    let title = cstr_from_cow(title);
+    let subtitle = subtitle.map(cstr_from_cow);
+    let disclaimer = disclaimer.map(cstr_from_cow);
+    let warning = warning.map(cstr_from_cow);
 
     if let Some(summary) = payment_summary {
         let mut entry = PaymentEntry::new(
             credential_id,
-            summary.merchant_name,
-            summary.transaction_amount,
+            cstr_from_cow(summary.merchant_name),
+            cstr_from_cow(summary.transaction_amount),
         );
-        entry.payment_method_name = Some(title.into());
-        entry.payment_method_subtitle = subtitle.map(Cow::Borrowed);
+        entry.payment_method_name = Some(title);
+        entry.payment_method_subtitle = subtitle;
         entry.payment_method_icon = icon.map(Cow::Borrowed);
-        entry.additional_info = summary.additional_info;
+        entry.additional_info = summary.additional_info.map(cstr_from_cow);
         entry.metadata = metadata;
-        entry.fields = fields;
+        entry.fields = Cow::Owned(fields);
         return Ok(CredentialEntry::Payment(entry));
     }
 
     let mut entry = StringIdEntry::new(credential_id, title);
     entry.icon = icon.map(Cow::Borrowed);
-    entry.subtitle = subtitle.map(Cow::Borrowed);
-    entry.disclaimer = disclaimer.map(Cow::Borrowed);
-    entry.warning = warning.map(Cow::Borrowed);
+    entry.subtitle = subtitle;
+    entry.disclaimer = disclaimer;
+    entry.warning = warning;
     entry.metadata = metadata;
-    entry.fields = fields;
+    entry.fields = Cow::Owned(fields);
 
     Ok(CredentialEntry::StringId(entry))
 }
 
-fn build_metadata(context: &DcqlSelectionContext<'_>) -> Option<Value> {
+fn build_metadata(context: &DcqlSelectionContext<'_>) -> Result<Option<&'static CStr>, MatcherError> {
     let mut obj = serde_json::Map::new();
     obj.insert(
         "credential_id".to_string(),
@@ -663,7 +676,42 @@ fn build_metadata(context: &DcqlSelectionContext<'_>) -> Option<Value> {
                 .collect(),
         ),
     );
-    Some(Value::Object(obj))
+    let value = Value::Object(obj);
+    let bytes = serde_json::to_vec(&value)
+        .map_err(|err| MatcherError::MetadataSerialization { source: err })?;
+    Ok(Some(cstr_from_bytes(bytes)))
+}
+
+fn set_id_for_dcql(protocol: &str, request_index: usize, alternative_index: usize) -> C8String {
+    let protocol_sanitized;
+    let protocol = if protocol.as_bytes().contains(&0) {
+        protocol_sanitized = protocol.replace('\0', "");
+        protocol_sanitized.as_str()
+    } else {
+        protocol
+    };
+    c8format!("{protocol}:{request_index}:dcql:{alternative_index}")
+}
+
+fn c8string_from_bytes(bytes: impl Into<Vec<u8>>) -> C8String {
+    let mut bytes = bytes.into();
+    bytes.retain(|byte| *byte != 0);
+    C8String::from_vec(bytes).unwrap_or_else(|_| C8String::new())
+}
+
+fn cstr_from_bytes(bytes: impl Into<Vec<u8>>) -> &'static CStr {
+    leak_c8string(c8string_from_bytes(bytes))
+}
+
+fn cstr_from_cow<'a>(value: Cow<'a, C8Str>) -> &'a CStr {
+    match value {
+        Cow::Borrowed(value) => value.as_c_str(),
+        Cow::Owned(value) => leak_c8string(value),
+    }
+}
+
+fn leak_c8string(value: C8String) -> &'static CStr {
+    Box::leak(value.into_c_string().into_boxed_c_str())
 }
 
 fn decode_transaction_data(

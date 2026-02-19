@@ -13,3 +13,4 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 base64 = { workspace = true }
 mini-alloc = { workspace = true }
+c8str = { workspace = true }

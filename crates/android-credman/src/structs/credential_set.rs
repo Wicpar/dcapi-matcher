@@ -1,4 +1,5 @@
-use crate::*;
+use crate::{CredmanApply, CredmanContext, CredmanSetContext, CredentialEntry, CredentialSlot};
+use core::ffi::CStr;
 use std::borrow::Cow;
 
 /// A visual group (Set) of credentials.
@@ -12,22 +13,23 @@ use std::borrow::Cow;
 /// - On hosts without set support (v1), entries are emitted as standalone rows.
 #[derive(Debug, Clone)]
 pub struct CredentialSet<'a> {
-    pub set_id: Cow<'a, str>,
-    pub slots: Vec<CredentialSlot<'a>>,
+    pub set_id: &'a CStr,
+    pub slots: Cow<'a, [CredentialSlot<'a>]>,
 }
 
 impl<'a> CredentialSet<'a> {
-    pub fn new(set_id: impl Into<Cow<'a, str>>) -> Self {
-        let set_id = normalize(set_id.into());
+    pub fn new(set_id: &'a CStr) -> Self {
         Self {
             set_id,
-            slots: Vec::new(),
+            slots: Cow::Borrowed(&[]),
         }
     }
 
     /// Adds a slot to the set.
     pub fn add_slot<S: Into<CredentialSlot<'a>>>(mut self, slot: S) -> Self {
-        self.slots.push(slot.into());
+        let mut slots = self.slots.into_owned();
+        slots.push(slot.into());
+        self.slots = Cow::Owned(slots);
         self
     }
 
@@ -41,44 +43,43 @@ impl<'a> CredentialSet<'a> {
     where
         I: IntoIterator<Item = CredentialEntry<'a>>,
     {
-        self.slots
-            .extend(entries.into_iter().map(CredentialSlot::from));
+        let mut slots = self.slots.into_owned();
+        slots.extend(entries.into_iter().map(CredentialSlot::from));
+        self.slots = Cow::Owned(slots);
         self
     }
 }
 
-impl<'a> CredmanApply<()> for CredentialSet<'a> {
-    fn apply(&self, _: ()) {
+impl<'a, 'b> CredmanApply<CredmanContext<'b>> for CredentialSet<'a> {
+    fn apply(&self, ctx: CredmanContext<'b>) {
         if self.slots.is_empty() {
             return;
         }
-        let host = credman();
-        if let Some(v2) = host.as_v2() {
-            v2.add_entry_set(&EntrySetRequest {
-                set_id: self.set_id.as_ref(),
-                set_length: self.slots.len() as i32,
-            });
+        if let Some(v2) = ctx.host.as_v2() {
+            v2.add_entry_set(self);
             for (i, slot) in self.slots.iter().enumerate() {
-                for entry in &slot.alternatives {
-                    CredmanApply::apply(entry, (self.set_id.as_ref(), i as i32));
+                for entry in slot.alternatives.iter() {
+                    let set_ctx = CredmanSetContext {
+                        v2,
+                        set_id: self.set_id,
+                        set_index: i as i32,
+                    };
+                    CredmanApply::apply(entry, set_ctx);
                 }
             }
             return;
         }
 
-        // Host does not support sets (v1): degrade to standalone entries.
-        for slot in &self.slots {
-            for entry in &slot.alternatives {
-                CredmanApply::apply(entry, ());
-            }
+        // Host does not support sets (v1): only render when there is exactly one slot.
+        let mut slots = self.slots.iter();
+        let Some(slot) = slots.next() else {
+            return;
+        };
+        if slots.next().is_some() {
+            return;
         }
-    }
-}
-
-fn normalize<'a>(value: Cow<'a, str>) -> Cow<'a, str> {
-    if value.is_empty() {
-        Cow::Borrowed("_")
-    } else {
-        value
+        for entry in slot.alternatives.iter() {
+            CredmanApply::apply(entry, ctx);
+        }
     }
 }

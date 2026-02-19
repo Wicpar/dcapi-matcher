@@ -59,7 +59,7 @@ pub enum Ts12MetadataError {
     SchemaInvalid {
         credential_id: String,
         data_type: TransactionDataType,
-        error: Box<json_schema_validator_core::ValidationError>,
+        error: String,
     },
     /// Payload failed schema validation.
     #[error(
@@ -68,7 +68,7 @@ pub enum Ts12MetadataError {
     SchemaValidation {
         credential_id: String,
         data_type: TransactionDataType,
-        errors: Vec<json_schema_validator_core::ValidationError>,
+        errors: Vec<String>,
     },
     /// Missing claim metadata for a payload path.
     #[error(

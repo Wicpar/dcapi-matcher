@@ -65,23 +65,17 @@ impl Read for CredentialReader {
 
 impl Seek for CredentialReader {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let new_off: i128 = match pos {
-            SeekFrom::Start(n) => n as i128,
-            SeekFrom::End(n) => self.size as i128 + n as i128,
-            SeekFrom::Current(n) => self.offset as i128 + n as i128,
-        };
-        if new_off < 0 {
+        let Some(new_off) = (match pos {
+            SeekFrom::Start(n) => Some(n),
+            SeekFrom::End(n) => self.size.checked_add_signed(n),
+            SeekFrom::Current(n) => self.offset.checked_add_signed(n),
+        }) else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "seek before start",
             ));
-        }
-        let new_off = new_off as u64;
-        self.offset = if new_off > self.size {
-            self.size
-        } else {
-            new_off
         };
+        self.offset = new_off;
         Ok(self.offset)
     }
 }

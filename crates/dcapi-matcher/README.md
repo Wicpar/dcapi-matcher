@@ -71,7 +71,7 @@ The matcher currently enforces and/or supports the following OpenID behavior:
     - TS12 payloads are validated against the JSON Schema object provided in that metadata
       (no built-in schemas are embedded in the matcher). External `$ref` references are forbidden;
       only local fragment refs (starting with `#`) are accepted.
-    - `MatcherStore::preferred_locales` must be provided for TS12; missing localized labels cause
+    - `MatcherStore::locales` must be provided for TS12; missing localized labels cause
       the matcher to return an error.
     - transaction fields are emitted as entry fields and appear before claim fields in string-id entries.
     - payment-style rendering is only used when a single TS12 entry provides payment payload data,

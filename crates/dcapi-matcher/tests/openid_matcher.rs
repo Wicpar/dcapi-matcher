@@ -1,4 +1,4 @@
-use android_credman::{CredmanRender, CredentialReader};
+use android_credman::CredmanRender;
 use android_credman::test_shim::{self, DisplayEvent};
 use base64::Engine;
 use dcapi_dcql::{
@@ -13,19 +13,25 @@ use dcapi_matcher::{
     Ts12PaymentSummary, Ts12TransactionMetadata, decode_json_package,
     match_dc_api_request as match_dc_api_request_internal,
 };
+use c8str::{c8, c8format, C8Str, C8String};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::ffi::CStr;
+use std::sync::Mutex;
 
 const TS12_TYPE_PAYMENT: &str = "urn:eudi:sca:payment:1";
 const TS12_TYPE_GENERIC: &str = "urn:eudi:sca:generic:1";
+
+static REQUEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn match_dc_api_request<'a>(
     request: &str,
     store: &'a impl MatcherStore,
     options: &MatcherOptions,
 ) -> Result<dcapi_matcher::MatcherResponse<'a>, MatcherError> {
+    let _guard = REQUEST_LOCK.lock().unwrap();
     test_shim::set_request(request.as_bytes());
     match_dc_api_request_internal(store, options, &DefaultProfile)
 }
@@ -37,10 +43,14 @@ fn unsupported_reader<T>() -> Result<T, std::io::Error> {
     ))
 }
 
+fn c8string(value: &str) -> C8String {
+    c8format!("{value}")
+}
+
 #[derive(Clone)]
 struct TestCredential {
-    id: String,
-    title: String,
+    id: C8String,
+    title: C8String,
     format: CredentialFormat,
     protocols: HashSet<String>,
     vcts: Vec<String>,
@@ -48,7 +58,7 @@ struct TestCredential {
     holder_binding: bool,
     claims: Value,
     transaction_data_types: Vec<TransactionDataType>,
-    ts12_metadata: Vec<Ts12TransactionMetadata>,
+    ts12_metadata: Vec<Ts12TransactionMetadata<'static>>,
 }
 
 struct TestStore {
@@ -71,9 +81,9 @@ impl TestStore {
 
 impl CredentialStore for TestStore {
     type CredentialRef = usize;
-    type ReadResult = Result<Self, std::io::Error>;
+    type ReadError = std::io::Error;
 
-    fn from_reader(_reader: CredentialReader) -> Self::ReadResult {
+    fn from_reader(_reader: &mut dyn std::io::Read) -> Result<Self, Self::ReadError> {
         unsupported_reader()
     }
 
@@ -89,7 +99,7 @@ impl CredentialStore for TestStore {
     }
 
     fn format(&self, cred: &Self::CredentialRef) -> CredentialFormat {
-        self.get(*cred).format.clone()
+        self.get(*cred).format
     }
 
     fn has_vct(&self, cred: &Self::CredentialRef, vct: &str) -> bool {
@@ -144,34 +154,34 @@ impl CredentialStore for TestStore {
 }
 
 impl MatcherStore for TestStore {
-    fn credential_id<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str {
-        self.get(*cred).id.as_str()
+    fn credential_id<'a>(&'a self, cred: &Self::CredentialRef) -> Cow<'a, C8Str> {
+        Cow::Borrowed(self.get(*cred).id.as_c8_str())
     }
 
-    fn credential_title<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str {
-        self.get(*cred).title.as_str()
+    fn credential_title<'a>(&'a self, cred: &Self::CredentialRef) -> Cow<'a, C8Str> {
+        Cow::Borrowed(self.get(*cred).title.as_c8_str())
     }
 
     fn get_credential_field_label<'a>(
         &'a self,
         _cred: &Self::CredentialRef,
         path: &ClaimsPathPointer,
-    ) -> Option<&'a str> {
+    ) -> Option<Cow<'a, C8Str>> {
         if path.iter().any(|segment| matches!(segment, PathElement::Wildcard)) {
             return None;
         }
-        Some("name")
+        Some(Cow::Borrowed(c8!("name")))
     }
 
     fn get_credential_field_value<'a>(
         &'a self,
         cred: &Self::CredentialRef,
         path: &ClaimsPathPointer,
-    ) -> Option<&'a str> {
+    ) -> Option<Cow<'a, C8Str>> {
         if path.iter().any(|segment| matches!(segment, PathElement::Wildcard)) {
             return None;
         }
-        Some(self.get(*cred).title.as_str())
+        Some(Cow::Borrowed(self.get(*cred).title.as_c8_str()))
     }
 
     fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
@@ -182,7 +192,7 @@ impl MatcherStore for TestStore {
         &self,
         cred: &Self::CredentialRef,
         transaction_data: &dcapi_dcql::TransactionData,
-    ) -> Option<Ts12TransactionMetadata> {
+    ) -> Option<Ts12TransactionMetadata<'static>> {
         self.get(*cred)
             .ts12_metadata
             .iter()
@@ -195,7 +205,7 @@ impl MatcherStore for TestStore {
         _cred: &Self::CredentialRef,
         transaction_data: &dcapi_dcql::TransactionData,
         payload: &Value,
-        _metadata: &Ts12TransactionMetadata,
+        _metadata: &Ts12TransactionMetadata<'a>,
         _locale: &str,
     ) -> Option<Ts12PaymentSummary<'a>> {
         if transaction_data.data_type.r#type != TS12_TYPE_PAYMENT {
@@ -219,8 +229,8 @@ impl MatcherStore for TestStore {
             format!("{amount} {currency}")
         };
         Some(Ts12PaymentSummary {
-            merchant_name: Cow::Owned(merchant_name),
-            transaction_amount: Cow::Owned(transaction_amount),
+            merchant_name: Cow::Owned(c8string(&merchant_name)),
+            transaction_amount: Cow::Owned(c8string(&transaction_amount)),
             additional_info: None,
         })
     }
@@ -249,17 +259,17 @@ impl MatcherStore for TestStore {
         }
     }
 
-    fn preferred_locales(&self) -> &[&str] {
+    fn locales(&self) -> &[&str] {
         self.preferred_locales.as_slice()
     }
 }
 
-fn ts12_payment_metadata() -> Ts12TransactionMetadata {
+fn ts12_payment_metadata() -> Ts12TransactionMetadata<'static> {
     let ui_labels = vec![(
         "affirmative_action_label".to_string(),
         vec![Ts12LocalizedValue {
             locale: "en".to_string(),
-            value: "Confirm".to_string(),
+            value: Cow::Borrowed(c8!("Confirm")),
         }],
     )];
     let schema = json!({
@@ -292,7 +302,7 @@ fn ts12_payment_metadata() -> Ts12TransactionMetadata {
                 ],
                 display: vec![Ts12LocalizedLabel {
                     locale: "en".to_string(),
-                    label: "Transaction ID".to_string(),
+                    label: Cow::Borrowed(c8!("Transaction ID")),
                     description: None,
                 }],
             },
@@ -304,7 +314,7 @@ fn ts12_payment_metadata() -> Ts12TransactionMetadata {
                 ],
                 display: vec![Ts12LocalizedLabel {
                     locale: "en".to_string(),
-                    label: "Payee".to_string(),
+                    label: Cow::Borrowed(c8!("Payee")),
                     description: None,
                 }],
             },
@@ -316,7 +326,7 @@ fn ts12_payment_metadata() -> Ts12TransactionMetadata {
                 ],
                 display: vec![Ts12LocalizedLabel {
                     locale: "en".to_string(),
-                    label: "Payee ID".to_string(),
+                    label: Cow::Borrowed(c8!("Payee ID")),
                     description: None,
                 }],
             },
@@ -327,7 +337,7 @@ fn ts12_payment_metadata() -> Ts12TransactionMetadata {
                 ],
                 display: vec![Ts12LocalizedLabel {
                     locale: "en".to_string(),
-                    label: "Currency".to_string(),
+                    label: Cow::Borrowed(c8!("Currency")),
                     description: None,
                 }],
             },
@@ -338,7 +348,7 @@ fn ts12_payment_metadata() -> Ts12TransactionMetadata {
                 ],
                 display: vec![Ts12LocalizedLabel {
                     locale: "en".to_string(),
-                    label: "Amount".to_string(),
+                    label: Cow::Borrowed(c8!("Amount")),
                     description: None,
                 }],
             },
@@ -348,12 +358,12 @@ fn ts12_payment_metadata() -> Ts12TransactionMetadata {
     }
 }
 
-fn ts12_generic_metadata() -> Ts12TransactionMetadata {
+fn ts12_generic_metadata() -> Ts12TransactionMetadata<'static> {
     let ui_labels = vec![(
         "affirmative_action_label".to_string(),
         vec![Ts12LocalizedValue {
             locale: "en".to_string(),
-            value: "Confirm".to_string(),
+            value: Cow::Borrowed(c8!("Confirm")),
         }],
     )];
     let schema = json!({
@@ -379,7 +389,7 @@ fn ts12_generic_metadata() -> Ts12TransactionMetadata {
                 ],
                 display: vec![Ts12LocalizedLabel {
                     locale: "en".to_string(),
-                    label: "Transaction ID".to_string(),
+                    label: Cow::Borrowed(c8!("Transaction ID")),
                     description: None,
                 }],
             },
@@ -390,7 +400,7 @@ fn ts12_generic_metadata() -> Ts12TransactionMetadata {
                 ],
                 display: vec![Ts12LocalizedLabel {
                     locale: "en".to_string(),
-                    label: "Channel".to_string(),
+                    label: Cow::Borrowed(c8!("Channel")),
                     description: None,
                 }],
             },
@@ -407,8 +417,8 @@ fn ts12_options() -> MatcherOptions {
 fn test_store() -> TestStore {
     TestStore::new(vec![
         TestCredential {
-            id: "pid-1".to_string(),
-            title: "PID One".to_string(),
+            id: c8string("pid-1"),
+            title: c8string("PID One"),
             format: CredentialFormat::DcSdJwt,
             protocols: HashSet::from([
                 "openid4vp-v1-unsigned".to_string(),
@@ -435,8 +445,8 @@ fn test_store() -> TestStore {
             ts12_metadata: vec![ts12_payment_metadata(), ts12_generic_metadata()],
         },
         TestCredential {
-            id: "pid-2".to_string(),
-            title: "PID Two".to_string(),
+            id: c8string("pid-2"),
+            title: c8string("PID Two"),
             format: CredentialFormat::DcSdJwt,
             protocols: HashSet::from(["openid4vp-v1-unsigned".to_string()]),
             vcts: vec!["vct:pid".to_string()],
@@ -447,8 +457,8 @@ fn test_store() -> TestStore {
             ts12_metadata: vec![],
         },
         TestCredential {
-            id: "mdl-1".to_string(),
-            title: "mDL One".to_string(),
+            id: c8string("mdl-1"),
+            title: c8string("mDL One"),
             format: CredentialFormat::MsoMdoc,
             protocols: HashSet::from([
                 "openid4vp-v1-unsigned".to_string(),
@@ -470,9 +480,9 @@ struct VciStore {
 
 impl CredentialStore for VciStore {
     type CredentialRef = ();
-    type ReadResult = Result<Self, std::io::Error>;
+    type ReadError = std::io::Error;
 
-    fn from_reader(_reader: CredentialReader) -> Self::ReadResult {
+    fn from_reader(_reader: &mut dyn std::io::Read) -> Result<Self, Self::ReadError> {
         unsupported_reader()
     }
 
@@ -519,12 +529,12 @@ impl CredentialStore for VciStore {
 }
 
 impl MatcherStore for VciStore {
-    fn credential_id<'a>(&'a self, _cred: &Self::CredentialRef) -> &'a str {
-        "unused"
+    fn credential_id<'a>(&'a self, _cred: &Self::CredentialRef) -> Cow<'a, C8Str> {
+        Cow::Borrowed(c8!("unused"))
     }
 
-    fn credential_title<'a>(&'a self, _cred: &Self::CredentialRef) -> &'a str {
-        "unused"
+    fn credential_title<'a>(&'a self, _cred: &Self::CredentialRef) -> Cow<'a, C8Str> {
+        Cow::Borrowed(c8!("unused"))
     }
 
     fn supports_protocol(&self, _cred: &Self::CredentialRef, _protocol: &str) -> bool {
@@ -539,7 +549,7 @@ impl MatcherStore for VciStore {
         self.config
     }
 
-    fn preferred_locales(&self) -> &[&str] {
+    fn locales(&self) -> &[&str] {
         &[]
     }
 }
@@ -551,9 +561,9 @@ struct VpOverride<'a> {
 
 impl<'a> CredentialStore for VpOverride<'a> {
     type CredentialRef = usize;
-    type ReadResult = Result<Self, std::io::Error>;
+    type ReadError = std::io::Error;
 
-    fn from_reader(_reader: CredentialReader) -> Self::ReadResult {
+    fn from_reader(_reader: &mut dyn std::io::Read) -> Result<Self, Self::ReadError> {
         unsupported_reader()
     }
 
@@ -600,11 +610,11 @@ impl<'a> CredentialStore for VpOverride<'a> {
 }
 
 impl<'a> MatcherStore for VpOverride<'a> {
-    fn credential_id<'b>(&'b self, cred: &Self::CredentialRef) -> &'b str {
+    fn credential_id<'b>(&'b self, cred: &Self::CredentialRef) -> Cow<'b, C8Str> {
         self.inner.credential_id(cred)
     }
 
-    fn credential_title<'b>(&'b self, cred: &Self::CredentialRef) -> &'b str {
+    fn credential_title<'b>(&'b self, cred: &Self::CredentialRef) -> Cow<'b, C8Str> {
         self.inner.credential_title(cred)
     }
 
@@ -612,15 +622,24 @@ impl<'a> MatcherStore for VpOverride<'a> {
         self.inner.credential_icon(cred)
     }
 
-    fn credential_subtitle<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b str> {
+    fn credential_subtitle<'b>(
+        &'b self,
+        cred: &Self::CredentialRef,
+    ) -> Option<Cow<'b, C8Str>> {
         self.inner.credential_subtitle(cred)
     }
 
-    fn credential_disclaimer<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b str> {
+    fn credential_disclaimer<'b>(
+        &'b self,
+        cred: &Self::CredentialRef,
+    ) -> Option<Cow<'b, C8Str>> {
         self.inner.credential_disclaimer(cred)
     }
 
-    fn credential_warning<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b str> {
+    fn credential_warning<'b>(
+        &'b self,
+        cred: &Self::CredentialRef,
+    ) -> Option<Cow<'b, C8Str>> {
         self.inner.credential_warning(cred)
     }
 
@@ -628,7 +647,7 @@ impl<'a> MatcherStore for VpOverride<'a> {
         &'b self,
         cred: &Self::CredentialRef,
         path: &ClaimsPathPointer,
-    ) -> Option<&'b str> {
+    ) -> Option<Cow<'b, C8Str>> {
         self.inner.get_credential_field_label(cred, path)
     }
 
@@ -636,7 +655,7 @@ impl<'a> MatcherStore for VpOverride<'a> {
         &'b self,
         cred: &Self::CredentialRef,
         path: &ClaimsPathPointer,
-    ) -> Option<&'b str> {
+    ) -> Option<Cow<'b, C8Str>> {
         self.inner.get_credential_field_value(cred, path)
     }
 
@@ -652,35 +671,37 @@ impl<'a> MatcherStore for VpOverride<'a> {
         self.inner.openid4vci_config()
     }
 
-    fn preferred_locales(&self) -> &[&str] {
-        self.inner.preferred_locales()
+    fn locales(&self) -> &[&str] {
+        self.inner.locales()
     }
 }
 
-fn entry_metadata<'a>(entry: &'a CredentialEntry<'a>) -> Option<&'a str> {
+fn entry_metadata<'a>(entry: &'a CredentialEntry<'a>) -> Option<&'a CStr> {
     match entry {
         CredentialEntry::StringId(entry) => entry.metadata.as_deref(),
         CredentialEntry::Payment(entry) => entry.metadata.as_deref(),
     }
 }
 
-fn entry_cred_id<'a>(entry: &'a CredentialEntry<'a>) -> &'a str {
+fn entry_cred_id<'a>(entry: &'a CredentialEntry<'a>) -> &'a CStr {
     match entry {
-        CredentialEntry::StringId(entry) => entry.cred_id.as_ref(),
-        CredentialEntry::Payment(entry) => entry.cred_id.as_ref(),
+        CredentialEntry::StringId(entry) => entry.cred_id,
+        CredentialEntry::Payment(entry) => entry.cred_id,
     }
 }
 
 fn entry_fields<'a>(entry: &'a CredentialEntry<'a>) -> &'a [Field<'a>] {
     match entry {
-        CredentialEntry::StringId(entry) => entry.fields.as_slice(),
-        CredentialEntry::Payment(entry) => entry.fields.as_slice(),
+        CredentialEntry::StringId(entry) => entry.fields.as_ref(),
+        CredentialEntry::Payment(entry) => entry.fields.as_ref(),
     }
 }
 
-fn collect_set_configs(response: &dcapi_matcher::MatcherResponse) -> Vec<Vec<String>> {
+fn collect_set_configs<'a>(
+    response: &'a dcapi_matcher::MatcherResponse<'a>,
+) -> Vec<Vec<String>> {
     let mut out = Vec::new();
-    for result in &response.results {
+    for result in response.results.iter() {
         if let MatcherResult::Group(set) = result {
             let mut ids = set
                 .slots
@@ -689,6 +710,8 @@ fn collect_set_configs(response: &dcapi_matcher::MatcherResponse) -> Vec<Vec<Str
                     let entry = slot.alternatives.first()?;
                     Some(
                         entry_cred_id(entry)
+                            .to_str()
+                            .unwrap_or("")
                             .split('-')
                             .next()
                             .unwrap_or("")
@@ -789,7 +812,9 @@ fn openid4vp_transaction_data_encoded_is_decoded_and_attached() {
         panic!("expected set");
     };
     let first = &set.slots[0].alternatives[0];
-    let metadata = entry_metadata(first).unwrap();
+    let metadata = entry_metadata(first)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
     assert!(metadata.contains("\"credential_id\":\"pid\""));
     assert!(metadata.contains("\"transaction_data_indices\":[0]"));
 }
@@ -1168,10 +1193,10 @@ fn openid4vci_direct_offer_object_is_supported() {
         .filter_map(|result| match result {
             MatcherResult::InlineIssuance(entry) => Some(entry),
             _ => None,
-        })
+    })
         .collect::<Vec<_>>();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].cred_id.as_ref(), "pid_config");
+    assert_eq!(entries[0].cred_id.to_str().unwrap_or(""), "pid_config");
 }
 
 #[test]
@@ -1205,10 +1230,10 @@ fn openid4vci_offer_wrapper_and_metadata_configuration_are_supported() {
         .filter_map(|result| match result {
             MatcherResult::InlineIssuance(entry) => Some(entry),
             _ => None,
-        })
+    })
         .collect::<Vec<_>>();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].cred_id.as_ref(), "pid_config");
+    assert_eq!(entries[0].cred_id.to_str().unwrap_or(""), "pid_config");
 }
 
 #[test]
@@ -1294,7 +1319,13 @@ fn openid4vci_configuration_order_is_preserved_in_slots() {
             .results
             .iter()
             .filter_map(|result| match result {
-                MatcherResult::InlineIssuance(entry) => Some(entry.cred_id.as_ref().to_string()),
+                MatcherResult::InlineIssuance(entry) => Some(
+                    entry
+                        .cred_id
+                        .to_str()
+                        .unwrap_or("")
+                        .to_string(),
+                ),
                 _ => None,
             })
             .collect::<Vec<_>>(),
@@ -1458,9 +1489,9 @@ fn matcher_options_can_disable_openid4vci_processing() {
 
     impl<'a> CredentialStore for VciDisabled<'a> {
         type CredentialRef = usize;
-        type ReadResult = Result<Self, std::io::Error>;
+        type ReadError = std::io::Error;
 
-        fn from_reader(_reader: CredentialReader) -> Self::ReadResult {
+        fn from_reader(_reader: &mut dyn std::io::Read) -> Result<Self, Self::ReadError> {
             unsupported_reader()
         }
         fn list_credentials(&self, format: Option<CredentialFormat>) -> Vec<Self::CredentialRef> {
@@ -1499,11 +1530,11 @@ fn matcher_options_can_disable_openid4vci_processing() {
     }
 
     impl<'a> MatcherStore for VciDisabled<'a> {
-        fn credential_id<'b>(&'b self, cred: &Self::CredentialRef) -> &'b str {
+        fn credential_id<'b>(&'b self, cred: &Self::CredentialRef) -> Cow<'b, C8Str> {
             self.inner.credential_id(cred)
         }
 
-        fn credential_title<'b>(&'b self, cred: &Self::CredentialRef) -> &'b str {
+        fn credential_title<'b>(&'b self, cred: &Self::CredentialRef) -> Cow<'b, C8Str> {
             self.inner.credential_title(cred)
         }
 
@@ -1511,15 +1542,24 @@ fn matcher_options_can_disable_openid4vci_processing() {
             self.inner.credential_icon(cred)
         }
 
-        fn credential_subtitle<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b str> {
+        fn credential_subtitle<'b>(
+            &'b self,
+            cred: &Self::CredentialRef,
+        ) -> Option<Cow<'b, C8Str>> {
             self.inner.credential_subtitle(cred)
         }
 
-        fn credential_disclaimer<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b str> {
+        fn credential_disclaimer<'b>(
+            &'b self,
+            cred: &Self::CredentialRef,
+        ) -> Option<Cow<'b, C8Str>> {
             self.inner.credential_disclaimer(cred)
         }
 
-        fn credential_warning<'b>(&'b self, cred: &Self::CredentialRef) -> Option<&'b str> {
+        fn credential_warning<'b>(
+            &'b self,
+            cred: &Self::CredentialRef,
+        ) -> Option<Cow<'b, C8Str>> {
             self.inner.credential_warning(cred)
         }
 
@@ -1527,7 +1567,7 @@ fn matcher_options_can_disable_openid4vci_processing() {
             &'b self,
             cred: &Self::CredentialRef,
             path: &ClaimsPathPointer,
-        ) -> Option<&'b str> {
+        ) -> Option<Cow<'b, C8Str>> {
             self.inner.get_credential_field_label(cred, path)
         }
 
@@ -1535,7 +1575,7 @@ fn matcher_options_can_disable_openid4vci_processing() {
             &'b self,
             cred: &Self::CredentialRef,
             path: &ClaimsPathPointer,
-        ) -> Option<&'b str> {
+        ) -> Option<Cow<'b, C8Str>> {
             self.inner.get_credential_field_value(cred, path)
         }
         fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
@@ -1548,8 +1588,8 @@ fn matcher_options_can_disable_openid4vci_processing() {
             }
         }
 
-        fn preferred_locales(&self) -> &[&str] {
-            self.inner.preferred_locales()
+        fn locales(&self) -> &[&str] {
+            self.inner.locales()
         }
     }
 
@@ -1595,7 +1635,9 @@ fn metadata_preserves_object_key_order() {
     let MatcherResult::Group(set) = &response.results[0] else {
         panic!("expected set");
     };
-    let metadata = entry_metadata(&set.slots[0].alternatives[0]).unwrap();
+    let metadata = entry_metadata(&set.slots[0].alternatives[0])
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
     let pos_credential = metadata.find("\"credential_id\"").unwrap();
     let pos_indices = metadata.find("\"transaction_data_indices\"").unwrap();
     assert!(pos_credential < pos_indices);

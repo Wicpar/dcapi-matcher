@@ -1,5 +1,4 @@
 {
-  "result": "error",
-  "error": "InvalidQuery",
+  "result": "parse_error",
   "message": "dcql_query.credential_sets[].options[] must be non-empty"
 }

@@ -1,13 +1,14 @@
-use crate::path::ClaimsPathPointer;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use crate::CredentialFormat;
+use crate::path::ClaimsPathPointer;
+use serdev::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Core DCQL object from OpenID4VP.
 ///
 /// It intentionally models only DCQL members. `transaction_data` belongs to the
 /// enclosing Authorization Request and is therefore passed separately to the planner.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(validate = "validate_dcql_query")]
 pub struct DcqlQuery {
     /// Requested Credential Queries.
     pub credentials: Vec<CredentialQuery>,
@@ -72,6 +73,7 @@ pub struct SdJwtMeta {
 
 /// Format-agnostic Credential Query members.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(validate = "validate_credential_query_common")]
 pub struct CredentialQueryCommon {
     pub id: String,
     pub multiple: Option<bool>,
@@ -188,6 +190,7 @@ impl ClaimsQuery {
 
 /// Credential set constraint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(validate = "validate_credential_set_query")]
 pub struct CredentialSetQuery {
     /// Alternative required-id combinations.
     pub options: Vec<Vec<String>>,
@@ -196,6 +199,40 @@ pub struct CredentialSetQuery {
     pub required: bool,
     /// Optional verifier purpose string/object forwarded as-is.
     pub purpose: Option<Value>,
+}
+
+fn validate_dcql_query(value: &DcqlQuery) -> Result<(), String> {
+    if value.credentials.is_empty() {
+        return Err("dcql_query.credentials must contain at least one credential query".to_string());
+    }
+    Ok(())
+}
+
+fn validate_credential_query_common(value: &CredentialQueryCommon) -> Result<(), String> {
+    if value.claim_sets.is_some() {
+        if value.claims.is_none() {
+            return Err(format!("claim_sets without claims: {}", value.id));
+        }
+        let claims = value.claims.as_ref().unwrap();
+        if claims.iter().any(|claim| claim.id.is_none()) {
+            return Err(format!("claims missing id: {}", value.id));
+        }
+    }
+
+    if let Some(claims) = &value.claims
+        && claims.iter().any(|claim| claim.path.is_empty())
+    {
+        return Err(format!("empty claim path: {}", value.id));
+    }
+
+    Ok(())
+}
+
+fn validate_credential_set_query(value: &CredentialSetQuery) -> Result<(), String> {
+    if value.options.iter().any(|option| option.is_empty()) {
+        return Err("dcql_query.credential_sets[].options[] must be non-empty".to_string());
+    }
+    Ok(())
 }
 
 /// Default value for `CredentialSetQuery::required`.

@@ -1,4 +1,4 @@
-use crate::*;
+use crate::{CredmanApply, CredmanContext, CredmanSetContext, PaymentEntry, StringIdEntry};
 
 /// A single credential choice that can be rendered standalone or inside a Set.
 #[derive(Debug, Clone)]
@@ -7,17 +7,17 @@ pub enum CredentialEntry<'a> {
     Payment(PaymentEntry<'a>),
 }
 
-impl<'a> CredmanApply<()> for CredentialEntry<'a> {
-    fn apply(&self, _: ()) {
+impl<'a, 'b> CredmanApply<CredmanContext<'b>> for CredentialEntry<'a> {
+    fn apply(&self, ctx: CredmanContext<'b>) {
         match self {
-            CredentialEntry::StringId(e) => CredmanApply::apply(e, ()),
-            CredentialEntry::Payment(e) => CredmanApply::apply(e, ()),
+            CredentialEntry::StringId(e) => CredmanApply::apply(e, ctx),
+            CredentialEntry::Payment(e) => CredmanApply::apply(e, ctx),
         }
     }
 }
 
-impl<'a> CredmanApply<(&'a str, i32)> for CredentialEntry<'a> {
-    fn apply(&self, ctx: (&'a str, i32)) {
+impl<'a, 'b> CredmanApply<CredmanSetContext<'b>> for CredentialEntry<'a> {
+    fn apply(&self, ctx: CredmanSetContext<'b>) {
         match self {
             CredentialEntry::StringId(e) => CredmanApply::apply(e, ctx),
             CredentialEntry::Payment(e) => CredmanApply::apply(e, ctx),

@@ -1,4 +1,5 @@
-use crate::*;
+use crate::{CredmanApply, CredmanContext, CredentialEntry, CredentialSet, InlineIssuanceEntry};
+use std::borrow::Cow;
 
 #[derive(Debug, Clone)]
 pub enum MatcherResult<'a> {
@@ -7,12 +8,12 @@ pub enum MatcherResult<'a> {
     InlineIssuance(InlineIssuanceEntry<'a>),
 }
 
-impl<'a> CredmanApply<()> for MatcherResult<'a> {
-    fn apply(&self, _: ()) {
+impl<'a, 'b> CredmanApply<CredmanContext<'b>> for MatcherResult<'a> {
+    fn apply(&self, ctx: CredmanContext<'b>) {
         match self {
-            MatcherResult::Single(entry) => CredmanApply::apply(entry, ()),
-            MatcherResult::Group(set) => CredmanApply::apply(set, ()),
-            MatcherResult::InlineIssuance(entry) => CredmanApply::apply(entry, ()),
+            MatcherResult::Single(entry) => CredmanApply::apply(entry, ctx),
+            MatcherResult::Group(set) => CredmanApply::apply(set, ctx),
+            MatcherResult::InlineIssuance(entry) => CredmanApply::apply(entry, ctx),
         }
     }
 }
@@ -22,7 +23,7 @@ impl<'a> CredmanApply<()> for MatcherResult<'a> {
 /// This allows mixing multiple standalone entries and multiple sets.
 #[derive(Debug, Clone, Default)]
 pub struct MatcherResponse<'a> {
-    pub results: Vec<MatcherResult<'a>>,
+    pub results: Cow<'a, [MatcherResult<'a>]>,
 }
 
 impl<'a> MatcherResponse<'a> {
@@ -31,7 +32,9 @@ impl<'a> MatcherResponse<'a> {
     }
 
     pub fn add_result(mut self, result: MatcherResult<'a>) -> Self {
-        self.results.push(result);
+        let mut results = self.results.into_owned();
+        results.push(result);
+        self.results = Cow::Owned(results);
         self
     }
 
@@ -39,7 +42,9 @@ impl<'a> MatcherResponse<'a> {
     where
         I: IntoIterator<Item = MatcherResult<'a>>,
     {
-        self.results.extend(results);
+        let mut out = self.results.into_owned();
+        out.extend(results);
+        self.results = Cow::Owned(out);
         self
     }
 
@@ -77,10 +82,10 @@ impl<'a> MatcherResponse<'a> {
     }
 }
 
-impl<'a> CredmanApply<()> for MatcherResponse<'a> {
-    fn apply(&self, _: ()) {
-        for result in &self.results {
-            CredmanApply::apply(result, ());
+impl<'a, 'b> CredmanApply<CredmanContext<'b>> for MatcherResponse<'a> {
+    fn apply(&self, ctx: CredmanContext<'b>) {
+        for result in self.results.iter() {
+            CredmanApply::apply(result, ctx);
         }
     }
 }

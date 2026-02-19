@@ -1,4 +1,5 @@
-use crate::*;
+use crate::CredentialEntry;
+use std::borrow::Cow;
 
 /// A slot in a `CredentialSet` that contains one or more alternatives.
 ///
@@ -6,7 +7,7 @@ use crate::*;
 /// alternatives that the user can pick between (OR-selection).
 #[derive(Debug, Clone)]
 pub struct CredentialSlot<'a> {
-    pub alternatives: Vec<CredentialEntry<'a>>,
+    pub alternatives: Cow<'a, [CredentialEntry<'a>]>,
 }
 
 impl<'a> CredentialSlot<'a> {
@@ -16,13 +17,15 @@ impl<'a> CredentialSlot<'a> {
         I: IntoIterator<Item = CredentialEntry<'a>>,
     {
         Self {
-            alternatives: entries.into_iter().collect(),
+            alternatives: Cow::Owned(entries.into_iter().collect()),
         }
     }
 
     /// Adds an alternative to this slot.
     pub fn add_alternative(mut self, entry: CredentialEntry<'a>) -> Self {
-        self.alternatives.push(entry);
+        let mut alternatives = self.alternatives.into_owned();
+        alternatives.push(entry);
+        self.alternatives = Cow::Owned(alternatives);
         self
     }
 }

@@ -1,12 +1,16 @@
 extern crate alloc;
 
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use android_credman::{
-    CredentialEntry, CredentialSet, CredmanRender, InlineIssuanceEntry, StringIdEntry,
+    CredentialEntry, CredentialSet, CredmanApply, CredmanContext, InlineIssuanceEntry, StringIdEntry,
+    credman,
 };
 use crate::error::format_error_chain;
+use c8str::{C8Str, C8String, c8, c8format};
 use core::sync::atomic::{AtomicU64, Ordering};
+use core::ffi::CStr;
 use core::error::Error as CoreError;
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
@@ -21,15 +25,25 @@ pub enum LogLevel {
     Trace,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticContext {
+    Vp,
+    Vci,
+}
+
 impl LogLevel {
-    fn as_str(self) -> &'static str {
+    fn as_c8str(&self) -> &'static C8Str {
         match self {
-            LogLevel::Error => "ERROR",
-            LogLevel::Warn => "WARN",
-            LogLevel::Info => "INFO",
-            LogLevel::Debug => "DEBUG",
-            LogLevel::Trace => "TRACE",
+            LogLevel::Error => c8!("ERROR"),
+            LogLevel::Warn => c8!("WARN"),
+            LogLevel::Info => c8!("INFO"),
+            LogLevel::Debug => c8!("DEBUG"),
+            LogLevel::Trace => c8!("TRACE"),
         }
+    }
+
+    fn as_str(&self) -> &'static str {
+        self.as_c8str().as_str()
     }
 }
 
@@ -42,13 +56,19 @@ struct LogEntry {
 static LOGS: Mutex<Vec<LogEntry>> = Mutex::new(Vec::new());
 static LOG_LEVEL: Mutex<Option<LogLevel>> = Mutex::new(Some(LogLevel::Error));
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static DIAGNOSTIC_CONTEXT: Mutex<DiagnosticContext> = Mutex::new(DiagnosticContext::Vp);
 
 pub fn begin() {
     LOGS.lock().clear();
+    *DIAGNOSTIC_CONTEXT.lock() = DiagnosticContext::Vp;
 }
 
 pub fn set_level(level: Option<LogLevel>) {
     *LOG_LEVEL.lock() = level;
+}
+
+pub fn set_context(context: DiagnosticContext) {
+    *DIAGNOSTIC_CONTEXT.lock() = context;
 }
 
 pub fn debug(message: impl AsRef<str>) {
@@ -155,25 +175,41 @@ pub fn flush_and_apply() {
         return;
     }
 
-    let set = CredentialSet::new("dcapi:logs").add_entries(entries.iter().map(|entry| {
-        let id = next_id();
-        let cred_id = format!("dcapi:log:{id}");
-        let mut cred = StringIdEntry::new(cred_id, entry.level.as_str());
-        if !entry.message.is_empty() {
-            cred.disclaimer = Some(entry.message.as_str().into());
-        }
-        CredentialEntry::StringId(cred)
-    }));
-    set.render();
+    let host = credman();
+    let ctx = CredmanContext { host };
+    let context = *DIAGNOSTIC_CONTEXT.lock();
+    let prefix = match context {
+        DiagnosticContext::Vp => "dcapi:vp",
+        DiagnosticContext::Vci => "dcapi:vci",
+    };
 
-    for entry in &entries {
-        let id = next_id();
-        let cred_id = format!("dcapi:log-inline:{id}");
-        let mut inline = InlineIssuanceEntry::new(cred_id, entry.level.as_str());
-        if !entry.message.is_empty() {
-            inline.subtitle = Some(entry.message.as_str().into());
+    match context {
+        DiagnosticContext::Vp => {
+            let set_id = leak_c8string(c8format!("{prefix}:logs"));
+            let set = CredentialSet::new(set_id)
+                .add_entries(entries.iter().map(|entry| {
+                    let id = next_id();
+                    let cred_id = leak_c8string(c8format!("{prefix}:log:{id}"));
+                    let mut cred = StringIdEntry::new(cred_id, entry.level.as_c8str().as_c_str());
+                    if !entry.message.is_empty() {
+                        cred.disclaimer =
+                            Some(cstr_from_bytes(entry.message.as_bytes()));
+                    }
+                    CredentialEntry::StringId(cred)
+                }));
+            CredmanApply::apply(&set, ctx);
         }
-        inline.render();
+        DiagnosticContext::Vci => {
+            for entry in &entries {
+                let id = next_id();
+                let cred_id = leak_c8string(c8format!("{prefix}:log:{id}"));
+                let mut inline = InlineIssuanceEntry::new(cred_id, entry.level.as_c8str().as_c_str());
+                if !entry.message.is_empty() {
+                    inline.subtitle = Some(cstr_from_bytes(entry.message.as_bytes()));
+                }
+                CredmanApply::apply(&inline, ctx);
+            }
+        }
     }
 }
 
@@ -205,4 +241,18 @@ fn format_entry(entry: LogEntry) -> String {
 
 fn next_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+fn c8string_from_bytes(bytes: &[u8]) -> C8String {
+    let mut bytes = bytes.to_vec();
+    bytes.retain(|byte| *byte != 0);
+    C8String::from_vec(bytes).unwrap_or_else(|_| C8String::new())
+}
+
+fn cstr_from_bytes(bytes: &[u8]) -> &'static CStr {
+    leak_c8string(c8string_from_bytes(bytes))
+}
+
+fn leak_c8string(value: C8String) -> &'static CStr {
+    Box::leak(value.into_c_string().into_boxed_c_str())
 }

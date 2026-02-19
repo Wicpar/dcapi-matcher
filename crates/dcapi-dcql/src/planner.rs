@@ -247,9 +247,26 @@ where
     S::CredentialRef: Clone,
 {
     let format = query.format();
-    let common = query.common().ok_or(PlanError::Unsatisfied)?;
-    let meta = query.meta().ok_or(PlanError::Unsatisfied)?;
-    let candidates = store.list_credentials(Some(format)).into_iter().filter(|cred|meta_matches(store, &cred, query)).collect();
+    if matches!(format, CredentialFormat::Unknown) {
+        return Err(PlanError::InvalidQuery(
+            "unsupported credential format in dcql_query.credentials entry".to_string(),
+        ));
+    }
+    let common = query.common().ok_or_else(|| {
+        PlanError::InvalidQuery(
+            "unsupported credential format in dcql_query.credentials entry".to_string(),
+        )
+    })?;
+    let meta = query.meta().ok_or_else(|| {
+        PlanError::InvalidQuery(
+            "unsupported credential format in dcql_query.credentials entry".to_string(),
+        )
+    })?;
+    let candidates = store
+        .list_credentials(Some(format))
+        .into_iter()
+        .filter(|cred| meta_matches(store, cred, query))
+        .collect();
 
     Ok(QueryMatches {
         id: common.id.clone(),

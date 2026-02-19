@@ -6,6 +6,7 @@ readme = "README.md"
 
 [dependencies]
 android-credman-sys = { workspace = true }
+c8str = { workspace = true }
 thiserror = { workspace = true }
 
 [features]

@@ -36,17 +36,17 @@ pub enum ValueMatch {
 /// can keep zero-copy handles to wallet-internal credential records.
 pub trait CredentialStore {
     type CredentialRef: Clone + Eq + std::hash::Hash;
-    type ReadResult;
+    type ReadError: std::error::Error;
 
     /// Build a store from a credentials reader.
-    fn from_reader(reader: &mut dyn std::io::Read) -> Self::ReadResult;
+    fn from_reader(reader: &mut dyn std::io::Read) -> Result<Self, Self::ReadError> where Self: Sized;
 
     /// Build a store from the default credentials reader.
-    fn read() -> Self::ReadResult
+    fn read() -> Result<Self, Self::ReadError>
     where
         Self: Sized,
     {
-        Self::from_reader(CredentialReader::new())
+        Self::from_reader(&mut CredentialReader::new())
     }
 
     /// Enumerate credential references, optionally filtered by format.

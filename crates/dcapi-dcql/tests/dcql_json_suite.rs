@@ -1,13 +1,12 @@
 use dcapi_dcql::{
-    ClaimValue, CredentialFormat, CredentialReader, CredentialSetOptionMode, CredentialStore,
-    DcqlQuery, OptionalCredentialSetsMode, PlanError, PlanOptions, SelectionPlan, TransactionData,
+    ClaimValue, CredentialFormat, CredentialSetOptionMode, CredentialStore, DcqlQuery,
+    OptionalCredentialSetsMode, PlanError, PlanOptions, SelectionPlan, TransactionData,
     TransactionDataType, TrustedAuthority, ValueMatch, plan_selection,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 // -----------------------------
@@ -80,12 +79,10 @@ impl JsonStore {
 
 impl CredentialStore for JsonStore {
     type CredentialRef = String;
-    type ReadResult = Result<Self, std::io::Error>;
+    type ReadError = std::io::Error;
 
-    fn from_reader(mut reader: CredentialReader) -> Self::ReadResult {
-        let mut buffer = Vec::with_capacity(reader.len() as usize);
-        reader.read_to_end(&mut buffer)?;
-        let package: CredentialPackage = serde_json::from_slice(&buffer)
+    fn from_reader(reader: &mut dyn std::io::Read) -> Result<Self, Self::ReadError> {
+        let package: CredentialPackage = serde_json::from_reader(reader)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
         Ok(Self::from_package(package))
     }

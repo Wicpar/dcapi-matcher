@@ -1,4 +1,5 @@
-use crate::*;
+use crate::{CredmanApply, CredmanContext, CredmanFieldContext, CredmanFieldSetContext, CredmanSetContext, Field};
+use core::ffi::CStr;
 use std::borrow::Cow;
 
 /// High-fidelity Payment/SCA entry emphasizing merchant and amount.
@@ -13,28 +14,25 @@ use std::borrow::Cow;
 /// - `additional_info` is used only with the v3 set API (`AddPaymentEntryToSetV2`).
 #[derive(Debug, Clone)]
 pub struct PaymentEntry<'a> {
-    pub cred_id: Cow<'a, str>,
-    pub merchant_name: Cow<'a, str>,
-    pub transaction_amount: Cow<'a, str>,
-    pub payment_method_name: Option<Cow<'a, str>>,
-    pub payment_method_subtitle: Option<Cow<'a, str>>,
+    pub cred_id: &'a CStr,
+    pub merchant_name: &'a CStr,
+    pub transaction_amount: &'a CStr,
+    pub payment_method_name: Option<&'a CStr>,
+    pub payment_method_subtitle: Option<&'a CStr>,
     pub payment_method_icon: Option<Cow<'a, [u8]>>,
     pub bank_icon: Option<Cow<'a, [u8]>>,
     pub payment_provider_icon: Option<Cow<'a, [u8]>>,
-    pub metadata: Option<Cow<'a, str>>,
-    pub additional_info: Option<Cow<'a, str>>,
-    pub fields: Vec<Field<'a>>,
+    pub metadata: Option<&'a CStr>,
+    pub additional_info: Option<&'a CStr>,
+    pub fields: Cow<'a, [Field<'a>]>,
 }
 
 impl<'a> PaymentEntry<'a> {
     pub fn new(
-        cred_id: impl Into<Cow<'a, str>>,
-        merchant_name: impl Into<Cow<'a, str>>,
-        transaction_amount: impl Into<Cow<'a, str>>,
+        cred_id: &'a CStr,
+        merchant_name: &'a CStr,
+        transaction_amount: &'a CStr,
     ) -> Self {
-        let cred_id = normalize(cred_id.into());
-        let merchant_name = normalize(merchant_name.into());
-        let transaction_amount = normalize(transaction_amount.into());
         Self {
             cred_id,
             merchant_name,
@@ -46,191 +44,65 @@ impl<'a> PaymentEntry<'a> {
             payment_provider_icon: None,
             metadata: None,
             additional_info: None,
-            fields: Vec::new(),
+            fields: Cow::Borrowed(&[]),
         }
     }
 
-    pub fn payment_method_name(mut self, name: impl Into<Cow<'a, str>>) -> Self {
-        self.payment_method_name = Some(name.into());
-        self
-    }
-
-    pub fn payment_method_subtitle(mut self, subtitle: impl Into<Cow<'a, str>>) -> Self {
-        self.payment_method_subtitle = Some(subtitle.into());
-        self
-    }
-
-    pub fn payment_method_icon(mut self, icon: impl Into<Cow<'a, [u8]>>) -> Self {
-        self.payment_method_icon = Some(icon.into());
-        self
-    }
-
-    pub fn bank_icon(mut self, icon: impl Into<Cow<'a, [u8]>>) -> Self {
-        self.bank_icon = Some(icon.into());
-        self
-    }
-
-    pub fn payment_provider_icon(mut self, icon: impl Into<Cow<'a, [u8]>>) -> Self {
-        self.payment_provider_icon = Some(icon.into());
-        self
-    }
-
-    /// Attaches host callback metadata for set rendering (`credman_v2+`).
-    pub fn metadata(mut self, metadata: impl Into<Cow<'a, str>>) -> Self {
-        self.metadata = Some(metadata.into());
-        self
-    }
-
-    /// Adds v3+ payment context shown by modern hosts (`AddPaymentEntryToSetV2`).
-    pub fn additional_info(mut self, additional_info: impl Into<Cow<'a, str>>) -> Self {
-        self.additional_info = Some(additional_info.into());
-        self
-    }
-
-    pub fn add_field(
-        mut self,
-        display_name: impl Into<Cow<'a, str>>,
-        display_value: impl Into<Cow<'a, str>>,
-    ) -> Self {
-        self.fields
-            .push(Field::new(display_name, Some(display_value)));
+    pub fn add_field(mut self, display_name: &'a CStr, display_value: &'a CStr) -> Self {
+        let mut fields = self.fields.into_owned();
+        fields.push(Field::new(display_name, Some(display_value)));
+        self.fields = Cow::Owned(fields);
         self
     }
 }
 
-fn normalize<'a>(value: Cow<'a, str>) -> Cow<'a, str> {
-    if value.is_empty() {
-        Cow::Borrowed("_")
-    } else {
-        value
+impl<'a, 'b> CredmanApply<CredmanContext<'b>> for PaymentEntry<'a> {
+    fn apply(&self, ctx: CredmanContext<'b>) {
+        ctx.host.add_payment_entry(self);
+        apply_payment_fields(self, CredmanFieldContext { host: ctx.host, cred_id: self.cred_id });
     }
 }
 
-impl<'a> CredmanApply<()> for PaymentEntry<'a> {
-    fn apply(&self, _: ()) {
-        let host = credman();
-        host.add_payment_entry(&PaymentEntryRequest {
-            cred_id: self.cred_id.as_ref(),
-            merchant_name: self.merchant_name.as_ref(),
-            payment_method_name: self.payment_method_name.as_ref().map(|value| value.as_ref()),
-            payment_method_subtitle: self
-                .payment_method_subtitle
-                .as_ref()
-                .map(|value| value.as_ref()),
-            payment_method_icon: self
-                .payment_method_icon
-                .as_ref()
-                .map(|icon| icon.as_ref()),
-            transaction_amount: self.transaction_amount.as_ref(),
-            bank_icon: self.bank_icon.as_ref().map(|icon| icon.as_ref()),
-            payment_provider_icon: self
-                .payment_provider_icon
-                .as_ref()
-                .map(|icon| icon.as_ref()),
-        });
-        apply_payment_fields(self, None);
-    }
-}
-
-impl<'a> CredmanApply<(&'a str, i32)> for PaymentEntry<'a> {
-    fn apply(&self, (set_id, set_index): (&'a str, i32)) {
-        let host = credman();
-        if let Some(v3) = host.as_v3() {
-            v3.add_payment_entry_to_set_v2(&PaymentEntryToSetV2Request {
-                cred_id: self.cred_id.as_ref(),
-                merchant_name: self.merchant_name.as_ref(),
-                payment_method_name: self.payment_method_name.as_ref().map(|value| value.as_ref()),
-                payment_method_subtitle: self
-                    .payment_method_subtitle
-                    .as_ref()
-                    .map(|value| value.as_ref()),
-                payment_method_icon: self
-                    .payment_method_icon
-                    .as_ref()
-                    .map(|icon| icon.as_ref()),
-                transaction_amount: self.transaction_amount.as_ref(),
-                bank_icon: self.bank_icon.as_ref().map(|icon| icon.as_ref()),
-                payment_provider_icon: self
-                    .payment_provider_icon
-                    .as_ref()
-                    .map(|icon| icon.as_ref()),
-                additional_info: self.additional_info.as_ref().map(|value| value.as_ref()),
-                metadata: self.metadata.as_ref().map(|value| value.as_ref()),
-                set_id,
-                set_index,
-            });
-            apply_payment_fields(self, Some((set_id, set_index)));
-            return;
+impl<'a, 'b> CredmanApply<CredmanSetContext<'b>> for PaymentEntry<'a> {
+    fn apply(&self, ctx: CredmanSetContext<'b>) {
+        if let Some(v3) = ctx.v2.as_v3() {
+            v3.add_payment_entry_to_set_v2(self, ctx.set_id, ctx.set_index);
+        } else {
+            ctx.v2
+                .add_payment_entry_to_set(self, ctx.set_id, ctx.set_index);
         }
-
-        if let Some(v2) = host.as_v2() {
-            v2.add_payment_entry_to_set(&PaymentEntryToSetRequest {
-                cred_id: self.cred_id.as_ref(),
-                merchant_name: self.merchant_name.as_ref(),
-                payment_method_name: self.payment_method_name.as_ref().map(|value| value.as_ref()),
-                payment_method_subtitle: self
-                    .payment_method_subtitle
-                    .as_ref()
-                    .map(|value| value.as_ref()),
-                payment_method_icon: self
-                    .payment_method_icon
-                    .as_ref()
-                    .map(|icon| icon.as_ref()),
-                transaction_amount: self.transaction_amount.as_ref(),
-                bank_icon: self.bank_icon.as_ref().map(|icon| icon.as_ref()),
-                payment_provider_icon: self
-                    .payment_provider_icon
-                    .as_ref()
-                    .map(|icon| icon.as_ref()),
-                metadata: self.metadata.as_ref().map(|value| value.as_ref()),
-                set_id,
-                set_index,
-            });
-            apply_payment_fields(self, Some((set_id, set_index)));
-            return;
-        }
-
-        host.add_payment_entry(&PaymentEntryRequest {
-            cred_id: self.cred_id.as_ref(),
-            merchant_name: self.merchant_name.as_ref(),
-            payment_method_name: self.payment_method_name.as_ref().map(|value| value.as_ref()),
-            payment_method_subtitle: self
-                .payment_method_subtitle
-                .as_ref()
-                .map(|value| value.as_ref()),
-            payment_method_icon: self
-                .payment_method_icon
-                .as_ref()
-                .map(|icon| icon.as_ref()),
-            transaction_amount: self.transaction_amount.as_ref(),
-            bank_icon: self.bank_icon.as_ref().map(|icon| icon.as_ref()),
-            payment_provider_icon: self
-                .payment_provider_icon
-                .as_ref()
-                .map(|icon| icon.as_ref()),
-        });
-        apply_payment_fields(self, None);
+        apply_payment_fields_in_set(
+            self,
+            CredmanFieldSetContext {
+                v2: ctx.v2,
+                cred_id: self.cred_id,
+                set_id: ctx.set_id,
+                set_index: ctx.set_index,
+            },
+        );
     }
 }
 
-fn apply_payment_fields(entry: &PaymentEntry<'_>, ctx: Option<(&str, i32)>) {
+fn apply_payment_fields(entry: &PaymentEntry<'_>, ctx: CredmanFieldContext<'_>) {
     if entry.fields.is_empty() {
-        let field = Field::new("_", Some("_"));
-        match ctx {
-            Some((set_id, set_index)) => {
-                field.apply((entry.cred_id.as_ref(), set_id, set_index));
-            }
-            None => field.apply(entry.cred_id.as_ref()),
-        }
+        let field = Field::new(c"_", None);
+        field.apply(ctx);
         return;
     }
 
-    for field in &entry.fields {
-        match ctx {
-            Some((set_id, set_index)) => {
-                field.apply((entry.cred_id.as_ref(), set_id, set_index));
-            }
-            None => field.apply(entry.cred_id.as_ref()),
-        }
+    for field in entry.fields.iter() {
+        field.apply(ctx);
+    }
+}
+
+fn apply_payment_fields_in_set(entry: &PaymentEntry<'_>, ctx: CredmanFieldSetContext<'_>) {
+    if entry.fields.is_empty() {
+        let field = Field::new(c"_", Some(c"_"));
+        field.apply(ctx);
+        return;
+    }
+
+    for field in entry.fields.iter() {
+        field.apply(ctx);
     }
 }

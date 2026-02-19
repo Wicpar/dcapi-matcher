@@ -2,55 +2,56 @@ use crate::diagnostics::ErrorExt;
 use crate::error::{MatcherError, Ts12Error, Ts12MetadataError};
 use crate::traits::{DcqlSelectionContext, MatcherStore};
 use alloc::borrow::Cow;
-use dcapi_dcql::{
-    ClaimsPathPointer, PathElement, TransactionData, TransactionDataType, path_matches,
-};
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
+use c8str::{C8Str, C8String};
+use dcapi_dcql::{
+    ClaimsPathPointer, PathElement, TransactionData, TransactionDataType, path_matches,
+};
 use serde_json::Value;
 
 /// Localized label entry for TS12 claim metadata.
 #[derive(Debug, Clone)]
-pub struct Ts12LocalizedLabel {
+pub struct Ts12LocalizedLabel<'a> {
     /// RFC5646 locale identifier.
     pub locale: String,
     /// Human-readable label for the field.
-    pub label: String,
+    pub label: Cow<'a, C8Str>,
     /// Optional description text.
-    pub description: Option<String>,
+    pub description: Option<Cow<'a, C8Str>>,
 }
 
 /// One claim metadata entry for TS12 transaction data.
 #[derive(Debug, Clone)]
-pub struct Ts12ClaimMetadata {
+pub struct Ts12ClaimMetadata<'a> {
     /// Claims path pointer (relative to `payload`).
     pub path: ClaimsPathPointer,
     /// Localized display entries.
-    pub display: Vec<Ts12LocalizedLabel>,
+    pub display: Vec<Ts12LocalizedLabel<'a>>,
 }
 
 /// Localized UI label entry for TS12 UI elements.
 #[derive(Debug, Clone)]
-pub struct Ts12LocalizedValue {
+pub struct Ts12LocalizedValue<'a> {
     /// RFC5646 locale identifier.
     pub locale: String,
     /// Localized string value.
-    pub value: String,
+    pub value: Cow<'a, C8Str>,
 }
 
 /// TS12 UI label catalogue (preserves insertion order).
-pub type Ts12UiLabels = Vec<(String, Vec<Ts12LocalizedValue>)>;
+pub type Ts12UiLabels<'a> = Vec<(String, Vec<Ts12LocalizedValue<'a>>)>;
 
 /// Resolved TS12 transaction metadata for one transaction data type.
 #[derive(Debug, Clone)]
-pub struct Ts12TransactionMetadata {
+pub struct Ts12TransactionMetadata<'a> {
     /// Transaction data type and optional subtype this metadata applies to.
     pub data_type: TransactionDataType,
     /// Claim metadata entries for the transaction payload.
-    pub claims: Vec<Ts12ClaimMetadata>,
+    pub claims: Vec<Ts12ClaimMetadata<'a>>,
     /// Localised UI labels for transaction confirmation UI elements.
-    pub ui_labels: Ts12UiLabels,
+    pub ui_labels: Ts12UiLabels<'a>,
     /// JSON Schema object used to validate the transaction payload.
     pub schema: Value,
 }
@@ -59,11 +60,11 @@ pub struct Ts12TransactionMetadata {
 #[derive(Debug, Clone)]
 pub struct Ts12PaymentSummary<'a> {
     /// Merchant/payee name shown in payment UI.
-    pub merchant_name: Cow<'a, str>,
+    pub merchant_name: Cow<'a, C8Str>,
     /// Transaction amount string shown in payment UI.
-    pub transaction_amount: Cow<'a, str>,
+    pub transaction_amount: Cow<'a, C8Str>,
     /// Optional extra context for payment UI.
-    pub additional_info: Option<Cow<'a, str>>,
+    pub additional_info: Option<Cow<'a, C8Str>>,
 }
 
 /// Display payload for one credential selection containing TS12 transaction data.
@@ -75,14 +76,14 @@ pub(crate) struct Ts12Display<'a> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Ts12DisplayField<'a> {
-    pub display_name: Cow<'a, str>,
-    pub display_value: Cow<'a, str>,
+    pub display_name: Cow<'a, C8Str>,
+    pub display_value: Cow<'a, C8Str>,
 }
 
 #[derive(Debug, Clone)]
 struct Ts12RenderedField {
-    label: String,
-    value: String,
+    label: C8String,
+    value: C8String,
 }
 
 #[derive(Debug, Clone)]
@@ -111,9 +112,9 @@ pub(crate) fn validate_ts12_transaction_data(
 pub(crate) fn build_display_for_context<'a, S>(
     store: &'a S,
     cred: &S::CredentialRef,
-    credential_id: &str,
+    credential_id: &C8Str,
     context: &DcqlSelectionContext<'_>,
-    preferred_locales: &[&str],
+    locales: &[&str],
 ) -> Result<Option<Ts12Display<'a>>, MatcherError>
 where
     S: MatcherStore + ?Sized,
@@ -133,7 +134,7 @@ where
         };
         let Some(metadata) = store.ts12_transaction_metadata(cred, td) else {
             let err = Ts12MetadataError::MissingMetadata {
-                credential_id: credential_id.to_string(),
+                credential_id: credential_id.as_str().to_string(),
                 data_type: td.data_type.clone(),
             };
             err.warn();
@@ -144,7 +145,7 @@ where
             transaction_data: td,
             payload,
             metadata: &metadata,
-            preferred_locales,
+            locales,
             store,
             cred,
         };
@@ -190,11 +191,11 @@ where
 }
 
 struct RenderContext<'a, S: MatcherStore + ?Sized> {
-    credential_id: &'a str,
+    credential_id: &'a C8Str,
     transaction_data: &'a TransactionData,
     payload: &'a Value,
-    metadata: &'a Ts12TransactionMetadata,
-    preferred_locales: &'a [&'a str],
+    metadata: &'a Ts12TransactionMetadata<'a>,
+    locales: &'a [&'a str],
     store: &'a S,
     cred: &'a S::CredentialRef,
 }
@@ -208,17 +209,11 @@ where
     let data_type = ctx.transaction_data.data_type.clone();
     if ctx.metadata.data_type != data_type {
         return Err(Ts12MetadataError::MetadataTypeMismatch {
-            credential_id: ctx.credential_id.to_string(),
+            credential_id: ctx.credential_id.as_str().to_string(),
             expected: ctx.metadata.data_type.clone(),
             actual: data_type,
         });
     }
-    validate_payload_schema(
-        ctx.credential_id,
-        &ctx.metadata.data_type,
-        ctx.payload,
-        &ctx.metadata.schema,
-    )?;
     let mut fields = Vec::new();
     let mut collected = Vec::new();
     let mut path = vec![PathElement::String("payload".to_string())];
@@ -228,7 +223,7 @@ where
     for (path, value) in &collected {
         let Some(claim) = find_claim_metadata(&ctx.metadata.claims, path) else {
             return Err(Ts12MetadataError::MissingClaimMetadata {
-                credential_id: ctx.credential_id.to_string(),
+                credential_id: ctx.credential_id.as_str().to_string(),
                 data_type: ctx.metadata.data_type.clone(),
                 path: path.clone(),
             });
@@ -239,7 +234,7 @@ where
     let locale = select_locale(
         ctx.credential_id,
         &ctx.metadata.data_type,
-        ctx.preferred_locales,
+        ctx.locales,
         &used_claims,
         &ctx.metadata.ui_labels,
     )?;
@@ -254,15 +249,15 @@ where
     for (path, value, claim) in used_claims {
         let display = match_localized_label(&locale, &claim.display).ok_or_else(|| {
             Ts12MetadataError::MissingClaimLabel {
-                credential_id: ctx.credential_id.to_string(),
+                credential_id: ctx.credential_id.as_str().to_string(),
                 data_type: ctx.metadata.data_type.clone(),
                 locale: locale.clone(),
                 path: path.clone(),
             }
         })?;
-        if display.label.is_empty() {
+        if display.label.as_bytes().is_empty() {
             return Err(Ts12MetadataError::EmptyClaimLabel {
-                credential_id: ctx.credential_id.to_string(),
+                credential_id: ctx.credential_id.as_str().to_string(),
                 data_type: ctx.metadata.data_type.clone(),
                 locale: locale.clone(),
                 path: path.clone(),
@@ -271,9 +266,10 @@ where
         let formatted = ctx
             .store
             .format_ts12_value(ctx.cred, &path, &value, &locale)
+            .map(cow_to_c8string)
             .unwrap_or_else(|| format_value(&value));
         fields.push(Ts12RenderedField {
-            label: display.label.clone(),
+            label: cow_to_c8string(display.label.clone()),
             value: formatted,
         });
     }
@@ -309,9 +305,9 @@ fn collect_payload_fields(
 }
 
 fn find_claim_metadata<'a>(
-    claims: &'a [Ts12ClaimMetadata],
+    claims: &'a [Ts12ClaimMetadata<'a>],
     path: &ClaimsPathPointer,
-) -> Option<&'a Ts12ClaimMetadata> {
+) -> Option<&'a Ts12ClaimMetadata<'a>> {
     if let Some(found) = claims.iter().find(|claim| claim.path == *path) {
         return Some(found);
     }
@@ -319,24 +315,24 @@ fn find_claim_metadata<'a>(
 }
 
 fn select_locale(
-    credential_id: &str,
+    credential_id: &C8Str,
     data_type: &TransactionDataType,
-    preferred_locales: &[&str],
-    used_claims: &[(ClaimsPathPointer, Value, &Ts12ClaimMetadata)],
-    ui_labels: &Ts12UiLabels,
+    locales: &[&str],
+    used_claims: &[(ClaimsPathPointer, Value, &Ts12ClaimMetadata<'_>)],
+    ui_labels: &Ts12UiLabels<'_>,
 ) -> Result<String, Ts12MetadataError> {
     let Some(affirmative_labels) = ui_labels_entry(ui_labels, "affirmative_action_label") else {
         return Err(Ts12MetadataError::MissingUiLabels {
-            credential_id: credential_id.to_string(),
+            credential_id: credential_id.as_str().to_string(),
             data_type: data_type.clone(),
             label: "affirmative_action_label",
         });
     };
 
-    let candidates = if preferred_locales.is_empty() {
+    let candidates = if locales.is_empty() {
         fallback_locales(affirmative_labels)
     } else {
-        preferred_locales
+        locales
             .iter()
             .map(|value| (*value).to_string())
             .collect()
@@ -344,7 +340,7 @@ fn select_locale(
 
     if candidates.is_empty() {
         return Err(Ts12MetadataError::MissingPreferredLocales {
-            credential_id: credential_id.to_string(),
+            credential_id: credential_id.as_str().to_string(),
             data_type: data_type.clone(),
         });
     }
@@ -372,7 +368,7 @@ fn select_locale(
                 continue;
             };
             missing_claim_label = Some(Ts12MetadataError::MissingClaimLabel {
-                credential_id: credential_id.to_string(),
+                credential_id: credential_id.as_str().to_string(),
                 data_type: data_type.clone(),
                 locale: locale.clone(),
                 path: missing_path,
@@ -382,13 +378,13 @@ fn select_locale(
 
     let Some(first_locale) = candidates.first().cloned() else {
         return Err(Ts12MetadataError::MissingPreferredLocales {
-            credential_id: credential_id.to_string(),
+            credential_id: credential_id.as_str().to_string(),
             data_type: data_type.clone(),
         });
     };
     if missing_ui_label {
         return Err(Ts12MetadataError::MissingLocalizedUiLabel {
-            credential_id: credential_id.to_string(),
+            credential_id: credential_id.as_str().to_string(),
             data_type: data_type.clone(),
             label: "affirmative_action_label",
             locale: first_locale.clone(),
@@ -400,14 +396,14 @@ fn select_locale(
     }
 
     Err(Ts12MetadataError::MissingLocalizedUiLabel {
-        credential_id: credential_id.to_string(),
+        credential_id: credential_id.as_str().to_string(),
         data_type: data_type.clone(),
         label: "affirmative_action_label",
         locale: first_locale,
     })
 }
 
-fn fallback_locales(labels: &[Ts12LocalizedValue]) -> Vec<String> {
+fn fallback_locales(labels: &[Ts12LocalizedValue<'_>]) -> Vec<String> {
     let mut locales = Vec::new();
     for entry in labels {
         if locales.iter().any(|existing| existing == &entry.locale) {
@@ -419,32 +415,28 @@ fn fallback_locales(labels: &[Ts12LocalizedValue]) -> Vec<String> {
 }
 
 fn ui_labels_for_locale(
-    credential_id: &str,
+    credential_id: &C8Str,
     data_type: &TransactionDataType,
-    ui_labels: &Ts12UiLabels,
+    ui_labels: &Ts12UiLabels<'_>,
     locale: &str,
-) -> Result<Vec<(String, String)>, Ts12MetadataError> {
-    let mut out = Vec::new();
-    for (key, values) in ui_labels {
-        if let Some(entry) = match_localized_value(locale, values) {
-            out.push((key.clone(), entry.value.clone()));
-        }
-    }
-    if !out.iter().any(|(key, _)| key == "affirmative_action_label") {
+) -> Result<(), Ts12MetadataError> {
+    if !ui_labels.iter().any(|(key, values)| {
+        key == "affirmative_action_label" && match_localized_value(locale, values).is_some()
+    }) {
         return Err(Ts12MetadataError::MissingLocalizedUiLabel {
-            credential_id: credential_id.to_string(),
+            credential_id: credential_id.as_str().to_string(),
             data_type: data_type.clone(),
             label: "affirmative_action_label",
             locale: locale.to_string(),
         });
     }
-    Ok(out)
+    Ok(())
 }
 
 fn ui_labels_entry<'a>(
-    ui_labels: &'a Ts12UiLabels,
+    ui_labels: &'a Ts12UiLabels<'a>,
     key: &str,
-) -> Option<&'a [Ts12LocalizedValue]> {
+) -> Option<&'a [Ts12LocalizedValue<'a>]> {
     ui_labels
         .iter()
         .find(|(label_key, _)| label_key == key)
@@ -453,8 +445,8 @@ fn ui_labels_entry<'a>(
 
 fn match_localized_label<'a>(
     preferred: &str,
-    labels: &'a [Ts12LocalizedLabel],
-) -> Option<&'a Ts12LocalizedLabel> {
+    labels: &'a [Ts12LocalizedLabel<'a>],
+) -> Option<&'a Ts12LocalizedLabel<'a>> {
     let preferred = canonical_locale(preferred);
     let preferred_primary = primary_locale(&preferred);
     labels
@@ -469,8 +461,8 @@ fn match_localized_label<'a>(
 
 fn match_localized_value<'a>(
     preferred: &str,
-    values: &'a [Ts12LocalizedValue],
-) -> Option<&'a Ts12LocalizedValue> {
+    values: &'a [Ts12LocalizedValue<'a>],
+) -> Option<&'a Ts12LocalizedValue<'a>> {
     let preferred = canonical_locale(preferred);
     let preferred_primary = primary_locale(&preferred);
     values
@@ -491,79 +483,18 @@ fn primary_locale(value: &str) -> &str {
     value.split('-').next().unwrap_or(value)
 }
 
-fn format_value(value: &Value) -> String {
-    match value {
-        Value::String(v) => v.to_string(),
-        Value::Number(v) => v.to_string(),
-        Value::Bool(v) => v.to_string(),
-        Value::Null => String::new(),
-        Value::Array(_) | Value::Object(_) => value.to_string(),
-    }
+fn cow_to_c8string(value: Cow<'_, C8Str>) -> C8String {
+    value.into_owned()
 }
 
-fn validate_payload_schema(
-    credential_id: &str,
-    data_type: &TransactionDataType,
-    payload: &Value,
-    schema: &Value,
-) -> Result<(), Ts12MetadataError> {
-    let Value::Object(_) = schema else {
-        return Err(Ts12MetadataError::SchemaNotObject {
-            credential_id: credential_id.to_string(),
-            data_type: data_type.clone(),
-        });
+fn format_value(value: &Value) -> C8String {
+    let mut bytes = match value {
+        Value::String(v) => v.as_bytes().to_vec(),
+        Value::Number(v) => v.to_string().into_bytes(),
+        Value::Bool(v) => v.to_string().into_bytes(),
+        Value::Null => Vec::new(),
+        Value::Array(_) | Value::Object(_) => value.to_string().into_bytes(),
     };
-
-    ensure_local_schema_refs(credential_id, data_type, schema)?;
-
-    let validator = json_schema_validator_core::JsonSchemaValidator::new(
-        schema.clone(),
-        json_schema_validator_core::ValidationOptions::default(),
-    )
-    .map_err(|error| Ts12MetadataError::SchemaInvalid {
-        credential_id: credential_id.to_string(),
-        data_type: data_type.clone(),
-        error: Box::new(error),
-    })?;
-
-    let errors = validator.validate(payload);
-    if !errors.is_empty() {
-        return Err(Ts12MetadataError::SchemaValidation {
-            credential_id: credential_id.to_string(),
-            data_type: data_type.clone(),
-            errors,
-        });
-    }
-
-    Ok(())
-}
-
-fn ensure_local_schema_refs(
-    credential_id: &str,
-    data_type: &TransactionDataType,
-    schema: &Value,
-) -> Result<(), Ts12MetadataError> {
-    match schema {
-        Value::Object(map) => {
-            if let Some(reference) = map.get("$ref").and_then(Value::as_str)
-                && !reference.starts_with('#')
-            {
-                return Err(Ts12MetadataError::SchemaExternalRef {
-                    credential_id: credential_id.to_string(),
-                    data_type: data_type.clone(),
-                    reference: reference.to_string(),
-                });
-            }
-            for value in map.values() {
-                ensure_local_schema_refs(credential_id, data_type, value)?;
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                ensure_local_schema_refs(credential_id, data_type, value)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
+    bytes.retain(|byte| *byte != 0);
+    C8String::from_vec(bytes).unwrap_or_else(|_| C8String::new())
 }

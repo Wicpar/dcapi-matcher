@@ -7,12 +7,44 @@ use dcapi_dcql::{
 use dcapi_matcher::diagnostics::error;
 use dcapi_matcher::{
     DefaultProfile, LogLevel, MatcherOptions, MatcherStore, OpenId4VciConfig, OpenId4VpConfig,
-    Ts12ClaimMetadata, Ts12LocalizedLabel, Ts12LocalizedValue, Ts12TransactionMetadata,
-    Ts12UiLabels, dcapi_matcher, decode_json_package, match_dc_api_request,
+    Ts12ClaimMetadata, Ts12LocalizedLabel, Ts12LocalizedValue, Ts12TransactionMetadata, Ts12UiLabels,
+    dcapi_matcher, decode_json_package, match_dc_api_request,
 };
+use c8str::{C8Str, C8String, c8format};
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::io::Read;
+
+#[repr(transparent)]
+#[derive(Debug, Clone)]
+struct C8StringValue(C8String);
+
+impl core::ops::Deref for C8StringValue {
+    type Target = C8Str;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_c8_str()
+    }
+}
+
+impl From<C8StringValue> for C8String {
+    fn from(value: C8StringValue) -> Self {
+        value.0
+    }
+}
+
+impl<'de> Deserialize<'de> for C8StringValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        C8String::from_string(value)
+            .map(C8StringValue)
+            .map_err(serde::de::Error::custom)
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct PackageConfig {
@@ -30,12 +62,17 @@ struct PackageConfig {
 
 #[derive(Debug, Deserialize, Default)]
 struct CredentialConfig {
-    id: Option<String>,
+    #[serde(default)]
+    id: Option<C8StringValue>,
     format: String,
-    title: Option<String>,
-    subtitle: Option<String>,
-    disclaimer: Option<String>,
-    warning: Option<String>,
+    #[serde(default)]
+    title: Option<C8StringValue>,
+    #[serde(default)]
+    subtitle: Option<C8StringValue>,
+    #[serde(default)]
+    disclaimer: Option<C8StringValue>,
+    #[serde(default)]
+    warning: Option<C8StringValue>,
     #[serde(default)]
     fields: Vec<CredentialFieldConfig>,
     metadata: Option<Value>,
@@ -53,8 +90,9 @@ struct CredentialConfig {
 #[derive(Debug, Deserialize)]
 struct CredentialFieldConfig {
     path: ClaimsPathPointer,
-    display_name: String,
-    display_value: Option<String>,
+    display_name: C8StringValue,
+    #[serde(default)]
+    display_value: Option<C8StringValue>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,8 +116,9 @@ struct Ts12ClaimConfig {
 #[derive(Debug, Deserialize)]
 struct Ts12LocalizedLabelConfig {
     locale: String,
-    label: String,
-    description: Option<String>,
+    label: C8StringValue,
+    #[serde(default)]
+    description: Option<C8StringValue>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,7 +131,7 @@ struct Ts12UiLabelConfig {
 #[derive(Debug, Deserialize)]
 struct Ts12LocalizedValueConfig {
     locale: String,
-    value: String,
+    value: C8StringValue,
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,12 +143,12 @@ enum IconConfig {
 
 #[derive(Debug, Clone)]
 struct ResolvedCredential {
-    id: String,
+    id: C8String,
     format: CredentialFormat,
-    title: String,
-    subtitle: Option<String>,
-    disclaimer: Option<String>,
-    warning: Option<String>,
+    title: C8String,
+    subtitle: Option<C8String>,
+    disclaimer: Option<C8String>,
+    warning: Option<C8String>,
     fields: Vec<ResolvedFieldConfig>,
     metadata: Option<Value>,
     icon: Option<Vec<u8>>,
@@ -119,14 +158,87 @@ struct ResolvedCredential {
     claims: Value,
     protocols: Option<Vec<String>>,
     transaction_data_types: Vec<TransactionDataType>,
-    ts12_metadata: Vec<Ts12TransactionMetadata>,
+    ts12_metadata: Vec<ResolvedTs12Metadata>,
 }
 
 #[derive(Debug, Clone)]
 struct ResolvedFieldConfig {
     path: ClaimsPathPointer,
-    display_name: String,
-    display_value: Option<String>,
+    display_name: C8String,
+    display_value: Option<C8String>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedTs12Metadata {
+    data_type: TransactionDataType,
+    claims: Vec<ResolvedTs12ClaimMetadata>,
+    ui_labels: ResolvedTs12UiLabels,
+    schema: Value,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedTs12ClaimMetadata {
+    path: ClaimsPathPointer,
+    display: Vec<ResolvedTs12LocalizedLabel>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedTs12LocalizedLabel {
+    locale: String,
+    label: C8String,
+    description: Option<C8String>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedTs12LocalizedValue {
+    locale: String,
+    value: C8String,
+}
+
+type ResolvedTs12UiLabels = Vec<(String, Vec<ResolvedTs12LocalizedValue>)>;
+
+impl ResolvedTs12Metadata {
+    fn as_borrowed(&self) -> Ts12TransactionMetadata<'_> {
+        let claims = self
+            .claims
+            .iter()
+            .map(|claim| Ts12ClaimMetadata {
+                path: claim.path.clone(),
+                display: claim
+                    .display
+                    .iter()
+                    .map(|label| Ts12LocalizedLabel {
+                        locale: label.locale.clone(),
+                        label: Cow::Borrowed(label.label.as_c8_str()),
+                        description: label
+                            .description
+                            .as_ref()
+                            .map(|value| Cow::Borrowed(value.as_c8_str())),
+                    })
+                    .collect(),
+            })
+            .collect();
+        let ui_labels: Ts12UiLabels<'_> = self
+            .ui_labels
+            .iter()
+            .map(|(key, values)| {
+                let values = values
+                    .iter()
+                    .map(|value| Ts12LocalizedValue {
+                        locale: value.locale.clone(),
+                        value: Cow::Borrowed(value.value.as_c8_str()),
+                    })
+                    .collect();
+                (key.clone(), values)
+            })
+            .collect();
+        Ts12TransactionMetadata {
+            data_type: self.data_type.clone(),
+            claims,
+            ui_labels,
+            schema: self.schema.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -175,16 +287,16 @@ impl PackageStore {
 
 impl CredentialStore for PackageStore {
     type CredentialRef = usize;
-    type ReadResult = Result<(Self, PlanOptions), String>;
+    type ReadError = std::io::Error;
 
-    fn from_reader(mut reader: CredentialReader) -> Self::ReadResult {
-        let mut buffer = Vec::with_capacity(reader.len() as usize);
-        reader
-            .read_to_end(&mut buffer)
-            .map_err(|err| err.to_string())?;
+    fn from_reader(reader: &mut dyn std::io::Read) -> Result<Self, Self::ReadError> {
         let config: PackageConfig =
-            decode_json_package(&buffer).map_err(|err| err.to_string())?;
-        Self::from_config(config)
+            serde_json::from_reader(reader).map_err(|err| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, err)
+            })?;
+        let (store, _) = Self::from_config(config)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+        Ok(store)
     }
 
     fn list_credentials(&self, format: Option<CredentialFormat>) -> Vec<Self::CredentialRef> {
@@ -252,24 +364,42 @@ impl CredentialStore for PackageStore {
 }
 
 impl MatcherStore for PackageStore {
-    fn credential_id<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str {
-        self.get(*cred).id.as_str()
+    fn credential_id<'a>(&'a self, cred: &Self::CredentialRef) -> Cow<'a, C8Str> {
+        Cow::Borrowed(self.get(*cred).id.as_c8_str())
     }
 
-    fn credential_title<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str {
-        self.get(*cred).title.as_str()
+    fn credential_title<'a>(&'a self, cred: &Self::CredentialRef) -> Cow<'a, C8Str> {
+        Cow::Borrowed(self.get(*cred).title.as_c8_str())
     }
 
-    fn credential_subtitle<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a str> {
-        self.get(*cred).subtitle.as_deref()
+    fn credential_subtitle<'a>(
+        &'a self,
+        cred: &Self::CredentialRef,
+    ) -> Option<Cow<'a, C8Str>> {
+        self.get(*cred)
+            .subtitle
+            .as_ref()
+            .map(|value| Cow::Borrowed(value.as_c8_str()))
     }
 
-    fn credential_disclaimer<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a str> {
-        self.get(*cred).disclaimer.as_deref()
+    fn credential_disclaimer<'a>(
+        &'a self,
+        cred: &Self::CredentialRef,
+    ) -> Option<Cow<'a, C8Str>> {
+        self.get(*cred)
+            .disclaimer
+            .as_ref()
+            .map(|value| Cow::Borrowed(value.as_c8_str()))
     }
 
-    fn credential_warning<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a str> {
-        self.get(*cred).warning.as_deref()
+    fn credential_warning<'a>(
+        &'a self,
+        cred: &Self::CredentialRef,
+    ) -> Option<Cow<'a, C8Str>> {
+        self.get(*cred)
+            .warning
+            .as_ref()
+            .map(|value| Cow::Borrowed(value.as_c8_str()))
     }
 
     fn credential_icon<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a [u8]> {
@@ -280,7 +410,7 @@ impl MatcherStore for PackageStore {
         &'a self,
         cred: &Self::CredentialRef,
         path: &ClaimsPathPointer,
-    ) -> Option<&'a str> {
+    ) -> Option<Cow<'a, C8Str>> {
         if path_has_wildcard(path) {
             return None;
         }
@@ -288,20 +418,20 @@ impl MatcherStore for PackageStore {
         if let Some(metadata) = credential.metadata.as_ref()
             && let Some(display_name) = claim_display_name_from_metadata(metadata, path)
         {
-            return Some(display_name);
+            return c8string_from_str(display_name).map(Cow::Owned);
         }
         credential
             .fields
             .iter()
             .find(|field| path_matches(&field.path, path))
-            .map(|field| field.display_name.as_str())
+            .map(|field| Cow::Borrowed(field.display_name.as_c8_str()))
     }
 
     fn get_credential_field_value<'a>(
         &'a self,
         cred: &Self::CredentialRef,
         path: &ClaimsPathPointer,
-    ) -> Option<&'a str> {
+    ) -> Option<Cow<'a, C8Str>> {
         if path_has_wildcard(path) {
             return None;
         }
@@ -312,9 +442,11 @@ impl MatcherStore for PackageStore {
             .find(|field| path_matches(&field.path, path))
             && let Some(value) = field.display_value.as_deref()
         {
-            return Some(value);
+            return Some(Cow::Borrowed(value));
         }
         value_from_claims(&credential.claims, path)
+            .and_then(c8string_from_str)
+            .map(Cow::Owned)
     }
 
     fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
@@ -332,7 +464,7 @@ impl MatcherStore for PackageStore {
         self.openid4vci
     }
 
-    fn preferred_locales(&self) -> &[&str] {
+    fn locales(&self) -> &[&str] {
         static LOCALES: [&str; 1] = ["en"];
         &LOCALES
     }
@@ -341,16 +473,16 @@ impl MatcherStore for PackageStore {
         self.log_level
     }
 
-    fn ts12_transaction_metadata(
-        &self,
+    fn ts12_transaction_metadata<'a>(
+        &'a self,
         cred: &Self::CredentialRef,
         transaction_data: &dcapi_dcql::TransactionData,
-    ) -> Option<Ts12TransactionMetadata> {
+    ) -> Option<Ts12TransactionMetadata<'a>> {
         self.get(*cred)
             .ts12_metadata
             .iter()
             .find(|entry| entry.data_type == transaction_data.data_type)
-            .cloned()
+            .map(ResolvedTs12Metadata::as_borrowed)
     }
 }
 
@@ -365,8 +497,10 @@ fn resolve_credential(
     let fallback_prefix = default_id_prefix.unwrap_or(credential.format.as_str());
     let id = credential
         .id
-        .unwrap_or_else(|| format!("{fallback_prefix}-{index}"));
-    let title = credential.title.unwrap_or_else(|| id.clone());
+        .map(Into::into)
+        .unwrap_or_else(|| c8format!("{fallback_prefix}-{index}"));
+    let format = CredentialFormat::from(credential.format.as_str());
+    let title = credential.title.map(Into::into).unwrap_or_else(|| id.clone());
     let claims = credential
         .claims
         .unwrap_or_else(|| Value::Object(Map::new()));
@@ -380,8 +514,8 @@ fn resolve_credential(
         .into_iter()
         .map(|field| ResolvedFieldConfig {
             path: field.path,
-            display_name: field.display_name,
-            display_value: field.display_value,
+            display_name: field.display_name.into(),
+            display_value: field.display_value.map(Into::into),
         })
         .collect::<Vec<_>>();
     let ts12_metadata = credential
@@ -396,11 +530,11 @@ fn resolve_credential(
 
     Ok(ResolvedCredential {
         id,
-        format: credential.format,
+        format,
         title,
-        subtitle: credential.subtitle,
-        disclaimer: credential.disclaimer,
-        warning: credential.warning,
+        subtitle: credential.subtitle.map(Into::into),
+        disclaimer: credential.disclaimer.map(Into::into),
+        warning: credential.warning.map(Into::into),
         fields,
         metadata: credential.metadata,
         icon,
@@ -414,39 +548,39 @@ fn resolve_credential(
     })
 }
 
-fn resolve_ts12_metadata(config: Ts12MetadataConfig) -> Ts12TransactionMetadata {
+fn resolve_ts12_metadata(config: Ts12MetadataConfig) -> ResolvedTs12Metadata {
     let claims = config
         .claims
         .into_iter()
-        .map(|claim| Ts12ClaimMetadata {
+        .map(|claim| ResolvedTs12ClaimMetadata {
             path: claim.path,
             display: claim
                 .display
                 .into_iter()
-                .map(|label| Ts12LocalizedLabel {
+                .map(|label| ResolvedTs12LocalizedLabel {
                     locale: label.locale,
-                    label: label.label,
-                    description: label.description,
+                    label: label.label.into(),
+                    description: label.description.map(Into::into),
                 })
                 .collect(),
         })
         .collect();
-    let ui_labels: Ts12UiLabels = config
+    let ui_labels: ResolvedTs12UiLabels = config
         .ui_labels
         .into_iter()
         .map(|entry| {
             let values = entry
                 .values
                 .into_iter()
-                .map(|value| Ts12LocalizedValue {
+                .map(|value| ResolvedTs12LocalizedValue {
                     locale: value.locale,
-                    value: value.value,
+                    value: value.value.into(),
                 })
                 .collect();
             (entry.key, values)
         })
         .collect();
-    Ts12TransactionMetadata {
+    ResolvedTs12Metadata {
         data_type: config.data_type,
         claims,
         ui_labels,
@@ -505,6 +639,10 @@ fn path_has_wildcard(path: &ClaimsPathPointer) -> bool {
     path.iter().any(|segment| matches!(segment, PathElement::Wildcard))
 }
 
+fn c8string_from_str(value: &str) -> Option<C8String> {
+    C8String::from_string(value.to_string()).ok()
+}
+
 fn decode_config(bytes: &[u8]) -> Option<PackageConfig> {
     decode_json_package::<PackageConfig>(bytes).ok()
 }
@@ -531,8 +669,12 @@ fn decode_icon(icon: IconConfig) -> Result<Option<Vec<u8>>, String> {
 
 /// Credman matcher entrypoint for aptitude consortium config packages.
 #[dcapi_matcher]
-pub fn matcher_entrypoint(credentials: String) {
-    let Some(config) = decode_config(credentials.as_bytes()) else {
+pub fn matcher_entrypoint(mut credentials: CredentialReader) {
+    let mut buffer = Vec::new();
+    if credentials.read_to_end(&mut buffer).is_err() {
+        return;
+    }
+    let Some(config) = decode_config(&buffer) else {
         return;
     };
     dcapi_matcher::diagnostics::set_level(config.log_level);

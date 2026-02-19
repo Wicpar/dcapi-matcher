@@ -2,6 +2,8 @@ use crate::config::{OpenId4VciConfig, OpenId4VpConfig};
 use crate::diagnostics::LogLevel;
 use crate::models::PROTOCOL_OPENID4VP;
 use crate::ts12::{Ts12PaymentSummary, Ts12TransactionMetadata};
+use alloc::borrow::Cow;
+use c8str::C8Str;
 use dcapi_dcql::{ClaimsPathPointer, CredentialStore};
 use serde_json::Value;
 
@@ -35,10 +37,10 @@ impl DcqlSelectionContext<'_> {
 /// `dcapi-dcql`. Implementers only need to define how credentials are displayed.
 pub trait MatcherStore: CredentialStore {
     /// Credential selection id returned to host.
-    fn credential_id<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str;
+    fn credential_id<'a>(&'a self, cred: &Self::CredentialRef) -> Cow<'a, C8Str>;
 
     /// Entry title.
-    fn credential_title<'a>(&'a self, cred: &Self::CredentialRef) -> &'a str;
+    fn credential_title<'a>(&'a self, cred: &Self::CredentialRef) -> Cow<'a, C8Str>;
 
     /// Optional icon bytes.
     fn credential_icon<'a>(&'a self, _cred: &Self::CredentialRef) -> Option<&'a [u8]> {
@@ -46,17 +48,26 @@ pub trait MatcherStore: CredentialStore {
     }
 
     /// Optional subtitle.
-    fn credential_subtitle<'a>(&'a self, _cred: &Self::CredentialRef) -> Option<&'a str> {
+    fn credential_subtitle<'a>(
+        &'a self,
+        _cred: &Self::CredentialRef,
+    ) -> Option<Cow<'a, C8Str>> {
         None
     }
 
     /// Optional disclaimer.
-    fn credential_disclaimer<'a>(&'a self, _cred: &Self::CredentialRef) -> Option<&'a str> {
+    fn credential_disclaimer<'a>(
+        &'a self,
+        _cred: &Self::CredentialRef,
+    ) -> Option<Cow<'a, C8Str>> {
         None
     }
 
     /// Optional warning.
-    fn credential_warning<'a>(&'a self, _cred: &Self::CredentialRef) -> Option<&'a str> {
+    fn credential_warning<'a>(
+        &'a self,
+        _cred: &Self::CredentialRef,
+    ) -> Option<Cow<'a, C8Str>> {
         None
     }
 
@@ -67,7 +78,7 @@ pub trait MatcherStore: CredentialStore {
         &'a self,
         _cred: &Self::CredentialRef,
         _path: &ClaimsPathPointer,
-    ) -> Option<&'a str> {
+    ) -> Option<Cow<'a, C8Str>> {
         None
     }
 
@@ -78,7 +89,7 @@ pub trait MatcherStore: CredentialStore {
         &'a self,
         _cred: &Self::CredentialRef,
         _path: &ClaimsPathPointer,
-    ) -> Option<&'a str> {
+    ) -> Option<Cow<'a, C8Str>> {
         None
     }
 
@@ -97,8 +108,8 @@ pub trait MatcherStore: CredentialStore {
         OpenId4VciConfig::default()
     }
 
-    /// Preferred locales (RFC5646 identifiers) for UI rendering, in priority order.
-    fn preferred_locales(&self) -> &[&str];
+    /// Locales (RFC5646 identifiers) for UI rendering, in priority order.
+    fn locales(&self) -> &[&str];
 
     /// Logging level for matcher diagnostics. `None` disables logging.
     fn log_level(&self) -> Option<LogLevel> {
@@ -113,11 +124,11 @@ pub trait MatcherStore: CredentialStore {
     /// the matcher does not resolve schema URLs or built-in types, and it forbids external
     /// `$ref` references during validation. Return `None` when the credential does not
     /// support the provided transaction data type.
-    fn ts12_transaction_metadata(
-        &self,
+    fn ts12_transaction_metadata<'a>(
+        &'a self,
         _cred: &Self::CredentialRef,
         _transaction_data: &dcapi_dcql::TransactionData,
-    ) -> Option<Ts12TransactionMetadata> {
+    ) -> Option<Ts12TransactionMetadata<'a>> {
         None
     }
 
@@ -131,7 +142,7 @@ pub trait MatcherStore: CredentialStore {
         _cred: &Self::CredentialRef,
         _transaction_data: &dcapi_dcql::TransactionData,
         _payload: &Value,
-        _metadata: &Ts12TransactionMetadata,
+        _metadata: &Ts12TransactionMetadata<'a>,
         _locale: &str,
     ) -> Option<Ts12PaymentSummary<'a>> {
         None
@@ -143,13 +154,13 @@ pub trait MatcherStore: CredentialStore {
     /// (for example, translating recurrence frequency codes) without hardcoded strings
     /// in the matcher core. When `None` is returned, the matcher falls back to
     /// a basic string representation of the JSON value.
-    fn format_ts12_value(
-        &self,
+    fn format_ts12_value<'a>(
+        &'a self,
         _cred: &Self::CredentialRef,
         _path: &ClaimsPathPointer,
         _value: &Value,
         _locale: &str,
-    ) -> Option<String> {
+    ) -> Option<Cow<'a, C8Str>> {
         None
     }
 }
