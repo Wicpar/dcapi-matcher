@@ -1,4 +1,4 @@
-use crate::host::{credman, Credman, CredmanV2};
+use crate::host::{Credman, CredmanV2, credman};
 use core::ffi::CStr;
 
 /// Base context for standalone entry rendering.

@@ -1,4 +1,4 @@
-use crate::{CredmanApply, CredmanContext, CredmanSetContext, CredentialEntry, CredentialSlot};
+use crate::{CredentialEntry, CredentialSlot, CredmanApply, CredmanContext, CredmanSetContext};
 use core::ffi::CStr;
 use std::borrow::Cow;
 

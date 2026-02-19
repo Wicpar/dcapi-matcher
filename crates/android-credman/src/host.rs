@@ -103,13 +103,7 @@ pub trait CredmanV2: Credman {
     }
 
     /// Adds a field to an entry inside a set slot.
-    fn add_field_to_entry_set(
-        &self,
-        field: &Field,
-        cred_id: &CStr,
-        set_id: &CStr,
-        set_index: i32,
-    ) {
+    fn add_field_to_entry_set(&self, field: &Field, cred_id: &CStr, set_id: &CStr, set_index: i32) {
         abi::add_field_to_entry_set(field, cred_id, set_id, set_index);
     }
 
@@ -176,7 +170,6 @@ impl Credman for HostCredmanV1 {}
 impl sealed::Sealed for HostCredmanV1 {}
 
 impl Credman for HostCredmanV2 {
-
     fn as_v2(&self) -> Option<&dyn CredmanV2> {
         Some(self)
     }
@@ -186,7 +179,6 @@ impl CredmanV2 for HostCredmanV2 {}
 impl sealed::Sealed for HostCredmanV2 {}
 
 impl Credman for HostCredmanV3 {
-
     fn as_v2(&self) -> Option<&dyn CredmanV2> {
         Some(self)
     }
@@ -201,7 +193,6 @@ impl CredmanV3 for HostCredmanV3 {}
 impl sealed::Sealed for HostCredmanV3 {}
 
 impl Credman for HostCredmanV4 {
-
     fn as_v2(&self) -> Option<&dyn CredmanV2> {
         Some(self)
     }

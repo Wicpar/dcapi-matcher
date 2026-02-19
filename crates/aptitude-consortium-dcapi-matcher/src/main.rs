@@ -1,20 +1,18 @@
 use android_credman::CredmanRender;
 use base64::Engine;
+use c8str::{C8Str, C8String, c8, c8format};
 use dcapi_dcql::{
-    ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, PlanOptions, TransactionData,
-    TransactionDataType, ValueMatch, path_matches, PathElement,
+    ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, PathElement, PlanOptions,
+    TransactionData, TransactionDataType, ValueMatch, path_matches,
 };
-use dcapi_matcher::diagnostics::error;
 use dcapi_matcher::{
     DefaultProfile, LogLevel, MatcherOptions, MatcherStore, OpenId4VciConfig, OpenId4VpConfig,
-    Ts12ClaimMetadata, Ts12LocalizedLabel, Ts12LocalizedValue, Ts12TransactionMetadata, Ts12UiLabels,
-    dcapi_matcher, match_dc_api_request,
+    Ts12ClaimMetadata, Ts12LocalizedLabel, Ts12LocalizedValue, Ts12TransactionMetadata,
+    Ts12UiLabels, dcapi_matcher, match_dc_api_request,
 };
-use c8str::{C8Str, C8String, c8, c8format};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::borrow::Cow;
-use std::io::Read;
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
@@ -293,10 +291,8 @@ impl CredentialStore for PackageStore {
     type ReadError = std::io::Error;
 
     fn from_reader(reader: &mut dyn std::io::Read) -> Result<Self, Self::ReadError> {
-        let config: PackageConfig =
-            serde_json::from_reader(reader).map_err(|err| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, err)
-            })?;
+        let config: PackageConfig = serde_json::from_reader(reader)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
         Self::from_config(config)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
     }
@@ -383,22 +379,19 @@ impl CredentialStore for PackageStore {
 }
 
 impl MatcherStore for PackageStore {
-    fn credential_id<'a>(&'a self, cred: &Self::CredentialRef) -> Cow<'a, C8Str> {
+    fn credential_id(&self, cred: &Self::CredentialRef) -> Cow<'_, C8Str> {
         self.get(*cred)
             .map(|credential| Cow::Borrowed(credential.id.as_c8_str()))
             .unwrap_or(Cow::Borrowed(c8!("")))
     }
 
-    fn credential_title<'a>(&'a self, cred: &Self::CredentialRef) -> Cow<'a, C8Str> {
+    fn credential_title(&self, cred: &Self::CredentialRef) -> Cow<'_, C8Str> {
         self.get(*cred)
             .map(|credential| Cow::Borrowed(credential.title.as_c8_str()))
             .unwrap_or(Cow::Borrowed(c8!("")))
     }
 
-    fn credential_subtitle<'a>(
-        &'a self,
-        cred: &Self::CredentialRef,
-    ) -> Option<Cow<'a, C8Str>> {
+    fn credential_subtitle(&self, cred: &Self::CredentialRef) -> Option<Cow<'_, C8Str>> {
         self.get(*cred).and_then(|credential| {
             credential
                 .subtitle
@@ -407,10 +400,7 @@ impl MatcherStore for PackageStore {
         })
     }
 
-    fn credential_disclaimer<'a>(
-        &'a self,
-        cred: &Self::CredentialRef,
-    ) -> Option<Cow<'a, C8Str>> {
+    fn credential_disclaimer(&self, cred: &Self::CredentialRef) -> Option<Cow<'_, C8Str>> {
         self.get(*cred).and_then(|credential| {
             credential
                 .disclaimer
@@ -419,10 +409,7 @@ impl MatcherStore for PackageStore {
         })
     }
 
-    fn credential_warning<'a>(
-        &'a self,
-        cred: &Self::CredentialRef,
-    ) -> Option<Cow<'a, C8Str>> {
+    fn credential_warning(&self, cred: &Self::CredentialRef) -> Option<Cow<'_, C8Str>> {
         self.get(*cred).and_then(|credential| {
             credential
                 .warning
@@ -431,8 +418,9 @@ impl MatcherStore for PackageStore {
         })
     }
 
-    fn credential_icon<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a [u8]> {
-        self.get(*cred).and_then(|credential| credential.icon.as_deref())
+    fn credential_icon(&self, cred: &Self::CredentialRef) -> Option<&[u8]> {
+        self.get(*cred)
+            .and_then(|credential| credential.icon.as_deref())
     }
 
     fn get_credential_field_label<'a>(
@@ -443,9 +431,7 @@ impl MatcherStore for PackageStore {
         if path_has_wildcard(path) {
             return None;
         }
-        let Some(credential) = self.get(*cred) else {
-            return None;
-        };
+        let credential = self.get(*cred)?;
         if let Some(metadata) = credential.metadata.as_ref()
             && let Some(display_name) = claim_display_name_from_metadata(metadata, path)
         {
@@ -466,9 +452,7 @@ impl MatcherStore for PackageStore {
         if path_has_wildcard(path) {
             return None;
         }
-        let Some(credential) = self.get(*cred) else {
-            return None;
-        };
+        let credential = self.get(*cred)?;
         if let Some(field) = credential
             .fields
             .iter()
@@ -535,7 +519,10 @@ fn resolve_credential(
         .map(Into::into)
         .unwrap_or_else(|| c8format!("{fallback_prefix}-{index}"));
     let format = CredentialFormat::from(credential.format.as_str());
-    let title = credential.title.map(Into::into).unwrap_or_else(|| id.clone());
+    let title = credential
+        .title
+        .map(Into::into)
+        .unwrap_or_else(|| id.clone());
     let claims = credential
         .claims
         .unwrap_or_else(|| Value::Object(Map::new()));
@@ -671,7 +658,8 @@ fn value_from_claims<'a>(claims: &'a Value, path: &ClaimsPathPointer) -> Option<
 }
 
 fn path_has_wildcard(path: &ClaimsPathPointer) -> bool {
-    path.iter().any(|segment| matches!(segment, PathElement::Wildcard))
+    path.iter()
+        .any(|segment| matches!(segment, PathElement::Wildcard))
 }
 
 fn c8string_from_str(value: &str) -> Option<C8String> {
@@ -685,13 +673,13 @@ fn decode_icon(icon: IconConfig) -> Result<Option<Vec<u8>>, String> {
             if value.is_empty() {
                 return Ok(None);
             }
-            let standard = base64::engine::general_purpose::STANDARD;
-            if let Ok(bytes) = standard.decode(value.as_bytes()) {
-                return Ok(if bytes.is_empty() { None } else { Some(bytes) });
-            }
-            let url_safe = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-            if let Ok(bytes) = url_safe.decode(value.as_bytes()) {
-                return Ok(if bytes.is_empty() { None } else { Some(bytes) });
+            for engine in [
+                base64::engine::general_purpose::STANDARD,
+                base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            ] {
+                if let Ok(bytes) = engine.decode(value.as_bytes()) {
+                    return Ok(if bytes.is_empty() { None } else { Some(bytes) });
+                }
             }
             Err("invalid icon base64".to_string())
         }
@@ -700,7 +688,7 @@ fn decode_icon(icon: IconConfig) -> Result<Option<Vec<u8>>, String> {
 
 /// Credman matcher entrypoint for aptitude consortium config packages.
 #[dcapi_matcher]
-pub fn matcher_entrypoint(store: PackageStore) {
+fn matcher_entrypoint(store: PackageStore) {
     dcapi_matcher::diagnostics::set_level(store.log_level);
     let options = MatcherOptions {
         dcql: store.dcql_options(),

@@ -29,7 +29,6 @@ pub struct CallingAppInfo {
     pub origin: [u8; 512],
 }
 
-
 // -------------------------------------------------------------------------
 // Module: credman
 // Contains the core API functions exposed by the Android Credential Manager

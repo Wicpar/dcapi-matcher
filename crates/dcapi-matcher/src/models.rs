@@ -1,7 +1,7 @@
-use dcapi_dcql::DcqlQuery;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
+use dcapi_dcql::DcqlQuery;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -85,7 +85,6 @@ pub enum TransactionDataInput {
     /// Decoded JSON object.
     Decoded(Box<dcapi_dcql::TransactionData>),
 }
-
 
 /// OpenID4VCI request payload used by the matcher.
 ///

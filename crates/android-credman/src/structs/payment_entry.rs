@@ -1,4 +1,7 @@
-use crate::{CredmanApply, CredmanContext, CredmanFieldContext, CredmanFieldSetContext, CredmanSetContext, Field};
+use crate::{
+    CredmanApply, CredmanContext, CredmanFieldContext, CredmanFieldSetContext, CredmanSetContext,
+    Field,
+};
 use core::ffi::CStr;
 use std::borrow::Cow;
 
@@ -28,11 +31,7 @@ pub struct PaymentEntry<'a> {
 }
 
 impl<'a> PaymentEntry<'a> {
-    pub fn new(
-        cred_id: &'a CStr,
-        merchant_name: &'a CStr,
-        transaction_amount: &'a CStr,
-    ) -> Self {
+    pub fn new(cred_id: &'a CStr, merchant_name: &'a CStr, transaction_amount: &'a CStr) -> Self {
         Self {
             cred_id,
             merchant_name,
@@ -59,7 +58,13 @@ impl<'a> PaymentEntry<'a> {
 impl<'a, 'b> CredmanApply<CredmanContext<'b>> for PaymentEntry<'a> {
     fn apply(&self, ctx: CredmanContext<'b>) {
         ctx.host.add_payment_entry(self);
-        apply_payment_fields(self, CredmanFieldContext { host: ctx.host, cred_id: self.cred_id });
+        apply_payment_fields(
+            self,
+            CredmanFieldContext {
+                host: ctx.host,
+                cred_id: self.cred_id,
+            },
+        );
     }
 }
 

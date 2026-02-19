@@ -48,26 +48,17 @@ pub trait MatcherStore: CredentialStore {
     }
 
     /// Optional subtitle.
-    fn credential_subtitle<'a>(
-        &'a self,
-        _cred: &Self::CredentialRef,
-    ) -> Option<Cow<'a, C8Str>> {
+    fn credential_subtitle<'a>(&'a self, _cred: &Self::CredentialRef) -> Option<Cow<'a, C8Str>> {
         None
     }
 
     /// Optional disclaimer.
-    fn credential_disclaimer<'a>(
-        &'a self,
-        _cred: &Self::CredentialRef,
-    ) -> Option<Cow<'a, C8Str>> {
+    fn credential_disclaimer<'a>(&'a self, _cred: &Self::CredentialRef) -> Option<Cow<'a, C8Str>> {
         None
     }
 
     /// Optional warning.
-    fn credential_warning<'a>(
-        &'a self,
-        _cred: &Self::CredentialRef,
-    ) -> Option<Cow<'a, C8Str>> {
+    fn credential_warning<'a>(&'a self, _cred: &Self::CredentialRef) -> Option<Cow<'a, C8Str>> {
         None
     }
 

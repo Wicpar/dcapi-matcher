@@ -1,4 +1,4 @@
-use crate::{CredmanApply, CredmanContext, CredentialEntry, CredentialSet, InlineIssuanceEntry};
+use crate::{CredentialEntry, CredentialSet, CredmanApply, CredmanContext, InlineIssuanceEntry};
 use std::borrow::Cow;
 
 #[derive(Debug, Clone)]

@@ -5,7 +5,7 @@ use syn::{FnArg, ItemFn, parse_macro_input, spanned::Spanned};
 
 #[proc_macro_attribute]
 pub fn dcapi_matcher(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let mut input_fn = parse_macro_input!(item as ItemFn);
+    let input_fn = parse_macro_input!(item as ItemFn);
     let fn_name = &input_fn.sig.ident;
     let mut inputs = input_fn.sig.inputs.iter();
     let arg = match inputs.next() {

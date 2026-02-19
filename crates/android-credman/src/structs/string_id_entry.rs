@@ -1,4 +1,7 @@
-use crate::{CredmanApply, CredmanContext, CredmanFieldContext, CredmanFieldSetContext, CredmanSetContext, Field};
+use crate::{
+    CredmanApply, CredmanContext, CredmanFieldContext, CredmanFieldSetContext, CredmanSetContext,
+    Field,
+};
 use core::ffi::CStr;
 use std::borrow::Cow;
 
@@ -61,8 +64,7 @@ impl<'a, 'b> CredmanApply<CredmanContext<'b>> for StringIdEntry<'a> {
 
 impl<'a, 'b> CredmanApply<CredmanSetContext<'b>> for StringIdEntry<'a> {
     fn apply(&self, ctx: CredmanSetContext<'b>) {
-        ctx.v2
-            .add_entry_to_set(self, ctx.set_id, ctx.set_index);
+        ctx.v2.add_entry_to_set(self, ctx.set_id, ctx.set_index);
         if self.fields.is_empty() {
             let field = Field::new(c"_", Some(c"_"));
             let field_ctx = CredmanFieldSetContext {

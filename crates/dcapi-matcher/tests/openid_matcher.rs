@@ -1,19 +1,18 @@
 use android_credman::CredmanRender;
 use android_credman::test_shim::{self, DisplayEvent};
 use base64::Engine;
+use c8str::{C8Str, C8String, c8, c8format};
 use dcapi_dcql::{
     ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, PathElement,
     TransactionDataType, ValueMatch,
 };
 use dcapi_matcher::{
     CredentialEntry, DefaultProfile, Field, MatcherError, MatcherOptions, MatcherResult,
-    MatcherStore,
-    PROTOCOL_OPENID4VCI, PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
-    PROTOCOL_OPENID4VP_V1_UNSIGNED, Ts12ClaimMetadata, Ts12LocalizedLabel, Ts12LocalizedValue,
-    Ts12PaymentSummary, Ts12TransactionMetadata, decode_json_package,
-    match_dc_api_request as match_dc_api_request_internal,
+    MatcherStore, PROTOCOL_OPENID4VCI, PROTOCOL_OPENID4VP_V1_MULTISIGNED,
+    PROTOCOL_OPENID4VP_V1_SIGNED, PROTOCOL_OPENID4VP_V1_UNSIGNED, Ts12ClaimMetadata,
+    Ts12LocalizedLabel, Ts12LocalizedValue, Ts12PaymentSummary, Ts12TransactionMetadata,
+    decode_json_package, match_dc_api_request as match_dc_api_request_internal,
 };
-use c8str::{c8, c8format, C8Str, C8String};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::borrow::Cow;
@@ -92,7 +91,9 @@ impl CredentialStore for TestStore {
             .iter()
             .enumerate()
             .filter(|(_, credential)| {
-                format.map(|format| credential.format == format).unwrap_or(true)
+                format
+                    .map(|format| credential.format == format)
+                    .unwrap_or(true)
             })
             .map(|(idx, _)| idx)
             .collect()
@@ -167,7 +168,10 @@ impl MatcherStore for TestStore {
         _cred: &Self::CredentialRef,
         path: &ClaimsPathPointer,
     ) -> Option<Cow<'a, C8Str>> {
-        if path.iter().any(|segment| matches!(segment, PathElement::Wildcard)) {
+        if path
+            .iter()
+            .any(|segment| matches!(segment, PathElement::Wildcard))
+        {
             return None;
         }
         Some(Cow::Borrowed(c8!("name")))
@@ -178,7 +182,10 @@ impl MatcherStore for TestStore {
         cred: &Self::CredentialRef,
         path: &ClaimsPathPointer,
     ) -> Option<Cow<'a, C8Str>> {
-        if path.iter().any(|segment| matches!(segment, PathElement::Wildcard)) {
+        if path
+            .iter()
+            .any(|segment| matches!(segment, PathElement::Wildcard))
+        {
             return None;
         }
         Some(Cow::Borrowed(self.get(*cred).title.as_c8_str()))
@@ -622,24 +629,15 @@ impl<'a> MatcherStore for VpOverride<'a> {
         self.inner.credential_icon(cred)
     }
 
-    fn credential_subtitle<'b>(
-        &'b self,
-        cred: &Self::CredentialRef,
-    ) -> Option<Cow<'b, C8Str>> {
+    fn credential_subtitle<'b>(&'b self, cred: &Self::CredentialRef) -> Option<Cow<'b, C8Str>> {
         self.inner.credential_subtitle(cred)
     }
 
-    fn credential_disclaimer<'b>(
-        &'b self,
-        cred: &Self::CredentialRef,
-    ) -> Option<Cow<'b, C8Str>> {
+    fn credential_disclaimer<'b>(&'b self, cred: &Self::CredentialRef) -> Option<Cow<'b, C8Str>> {
         self.inner.credential_disclaimer(cred)
     }
 
-    fn credential_warning<'b>(
-        &'b self,
-        cred: &Self::CredentialRef,
-    ) -> Option<Cow<'b, C8Str>> {
+    fn credential_warning<'b>(&'b self, cred: &Self::CredentialRef) -> Option<Cow<'b, C8Str>> {
         self.inner.credential_warning(cred)
     }
 
@@ -697,9 +695,7 @@ fn entry_fields<'a>(entry: &'a CredentialEntry<'a>) -> &'a [Field<'a>] {
     }
 }
 
-fn collect_set_configs<'a>(
-    response: &'a dcapi_matcher::MatcherResponse<'a>,
-) -> Vec<Vec<String>> {
+fn collect_set_configs<'a>(response: &'a dcapi_matcher::MatcherResponse<'a>) -> Vec<Vec<String>> {
     let mut out = Vec::new();
     for result in response.results.iter() {
         if let MatcherResult::Group(set) = result {
@@ -1193,7 +1189,7 @@ fn openid4vci_direct_offer_object_is_supported() {
         .filter_map(|result| match result {
             MatcherResult::InlineIssuance(entry) => Some(entry),
             _ => None,
-    })
+        })
         .collect::<Vec<_>>();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].cred_id.to_str().unwrap_or(""), "pid_config");
@@ -1230,7 +1226,7 @@ fn openid4vci_offer_wrapper_and_metadata_configuration_are_supported() {
         .filter_map(|result| match result {
             MatcherResult::InlineIssuance(entry) => Some(entry),
             _ => None,
-    })
+        })
         .collect::<Vec<_>>();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].cred_id.to_str().unwrap_or(""), "pid_config");
@@ -1319,13 +1315,8 @@ fn openid4vci_configuration_order_is_preserved_in_slots() {
             .results
             .iter()
             .filter_map(|result| match result {
-                MatcherResult::InlineIssuance(entry) => Some(
-                    entry
-                        .cred_id
-                        .to_str()
-                        .unwrap_or("")
-                        .to_string(),
-                ),
+                MatcherResult::InlineIssuance(entry) =>
+                    Some(entry.cred_id.to_str().unwrap_or("").to_string(),),
                 _ => None,
             })
             .collect::<Vec<_>>(),
@@ -1542,10 +1533,7 @@ fn matcher_options_can_disable_openid4vci_processing() {
             self.inner.credential_icon(cred)
         }
 
-        fn credential_subtitle<'b>(
-            &'b self,
-            cred: &Self::CredentialRef,
-        ) -> Option<Cow<'b, C8Str>> {
+        fn credential_subtitle<'b>(&'b self, cred: &Self::CredentialRef) -> Option<Cow<'b, C8Str>> {
             self.inner.credential_subtitle(cred)
         }
 
@@ -1556,10 +1544,7 @@ fn matcher_options_can_disable_openid4vci_processing() {
             self.inner.credential_disclaimer(cred)
         }
 
-        fn credential_warning<'b>(
-            &'b self,
-            cred: &Self::CredentialRef,
-        ) -> Option<Cow<'b, C8Str>> {
+        fn credential_warning<'b>(&'b self, cred: &Self::CredentialRef) -> Option<Cow<'b, C8Str>> {
             self.inner.credential_warning(cred)
         }
 

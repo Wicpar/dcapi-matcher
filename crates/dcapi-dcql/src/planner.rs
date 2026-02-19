@@ -3,10 +3,10 @@ use crate::models::{
     TrustedAuthority,
 };
 use crate::path::{ClaimsPathPointer, PathElement};
-use serde::{Deserialize, Serialize};
 use crate::store::{CredentialFormat, CredentialStore, ValueMatch};
-use std::collections::{BTreeMap, BTreeSet};
 use rustc_hash::FxHashSet;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 /// Resolved matching context for one Credential Query id.
@@ -390,11 +390,7 @@ where
 {
     candidates
         .iter()
-        .filter(|cred| {
-            claims
-                .iter()
-                .all(|claim| claim_matches(store, cred, claim))
-        })
+        .filter(|cred| claims.iter().all(|claim| claim_matches(store, cred, claim)))
         .cloned()
         .collect()
 }

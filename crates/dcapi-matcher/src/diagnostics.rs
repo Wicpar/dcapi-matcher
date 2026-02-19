@@ -1,17 +1,17 @@
 extern crate alloc;
 
+use crate::error::format_error_chain;
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use android_credman::{
-    CredentialEntry, CredentialSet, CredmanApply, CredmanContext, InlineIssuanceEntry, StringIdEntry,
-    credman,
+    CredentialEntry, CredentialSet, CredmanApply, CredmanContext, InlineIssuanceEntry,
+    StringIdEntry, credman,
 };
-use crate::error::format_error_chain;
 use c8str::{C8Str, C8String, c8, c8format};
-use core::sync::atomic::{AtomicU64, Ordering};
-use core::ffi::CStr;
 use core::error::Error as CoreError;
+use core::ffi::CStr;
+use core::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
 
@@ -186,24 +186,23 @@ pub fn flush_and_apply() {
     match context {
         DiagnosticContext::Vp => {
             let set_id = leak_c8string(c8format!("{prefix}:logs"));
-            let set = CredentialSet::new(set_id)
-                .add_entries(entries.iter().map(|entry| {
-                    let id = next_id();
-                    let cred_id = leak_c8string(c8format!("{prefix}:log:{id}"));
-                    let mut cred = StringIdEntry::new(cred_id, entry.level.as_c8str().as_c_str());
-                    if !entry.message.is_empty() {
-                        cred.disclaimer =
-                            Some(cstr_from_bytes(entry.message.as_bytes()));
-                    }
-                    CredentialEntry::StringId(cred)
-                }));
+            let set = CredentialSet::new(set_id).add_entries(entries.iter().map(|entry| {
+                let id = next_id();
+                let cred_id = leak_c8string(c8format!("{prefix}:log:{id}"));
+                let mut cred = StringIdEntry::new(cred_id, entry.level.as_c8str().as_c_str());
+                if !entry.message.is_empty() {
+                    cred.disclaimer = Some(cstr_from_bytes(entry.message.as_bytes()));
+                }
+                CredentialEntry::StringId(cred)
+            }));
             CredmanApply::apply(&set, ctx);
         }
         DiagnosticContext::Vci => {
             for entry in &entries {
                 let id = next_id();
                 let cred_id = leak_c8string(c8format!("{prefix}:log:{id}"));
-                let mut inline = InlineIssuanceEntry::new(cred_id, entry.level.as_c8str().as_c_str());
+                let mut inline =
+                    InlineIssuanceEntry::new(cred_id, entry.level.as_c8str().as_c_str());
                 if !entry.message.is_empty() {
                     inline.subtitle = Some(cstr_from_bytes(entry.message.as_bytes()));
                 }
@@ -229,7 +228,6 @@ fn enabled(level: LogLevel) -> bool {
     };
     level <= threshold
 }
-
 
 fn format_entry(entry: LogEntry) -> String {
     if entry.message.is_empty() {

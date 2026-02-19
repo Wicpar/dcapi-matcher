@@ -1,7 +1,7 @@
 use crate::CredentialFormat;
 use crate::path::ClaimsPathPointer;
-use serdev::{Deserialize, Serialize};
 use serde_json::Value;
+use serdev::{Deserialize, Serialize};
 
 /// Core DCQL object from OpenID4VP.
 ///
@@ -44,7 +44,6 @@ pub enum CredentialQuery {
     #[serde(other)]
     Unknown,
 }
-
 
 /// Internal typed wrapper for the parsed `meta` object.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,7 +202,9 @@ pub struct CredentialSetQuery {
 
 fn validate_dcql_query(value: &DcqlQuery) -> Result<(), String> {
     if value.credentials.is_empty() {
-        return Err("dcql_query.credentials must contain at least one credential query".to_string());
+        return Err(
+            "dcql_query.credentials must contain at least one credential query".to_string(),
+        );
     }
     Ok(())
 }

@@ -18,7 +18,6 @@ impl<'a> VerificationEntryUpdate<'a> {
             url_value: None,
         }
     }
-
 }
 
 impl<'a, 'b> CredmanApply<CredmanContext<'b>> for VerificationEntryUpdate<'a> {

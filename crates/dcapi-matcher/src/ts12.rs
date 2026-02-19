@@ -274,10 +274,7 @@ where
         });
     }
 
-    Ok(Ts12TransactionDisplay {
-        locale,
-        fields,
-    })
+    Ok(Ts12TransactionDisplay { locale, fields })
 }
 
 fn collect_payload_fields(
@@ -332,10 +329,7 @@ fn select_locale(
     let candidates = if locales.is_empty() {
         fallback_locales(affirmative_labels)
     } else {
-        locales
-            .iter()
-            .map(|value| (*value).to_string())
-            .collect()
+        locales.iter().map(|value| (*value).to_string()).collect()
     };
 
     if candidates.is_empty() {

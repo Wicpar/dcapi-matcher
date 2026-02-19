@@ -1,7 +1,7 @@
-use dcapi_dcql::{ClaimsPathPointer, TransactionDataType};
 use crate::profile::ProfileError;
 use alloc::string::String;
 use core::error::Error as CoreError;
+use dcapi_dcql::{ClaimsPathPointer, TransactionDataType};
 use thiserror::Error;
 
 /// TS12-specific request/configuration warnings.
@@ -53,9 +53,7 @@ pub enum Ts12MetadataError {
         reference: String,
     },
     /// Schema compilation failed.
-    #[error(
-        "credential {credential_id} ts12 metadata for {data_type:?} invalid schema: {error:?}"
-    )]
+    #[error("credential {credential_id} ts12 metadata for {data_type:?} invalid schema: {error:?}")]
     SchemaInvalid {
         credential_id: String,
         data_type: TransactionDataType,
@@ -117,7 +115,9 @@ pub enum Ts12MetadataError {
         locale: String,
     },
     /// Preferred locales are required for TS12 display.
-    #[error("credential {credential_id} ts12 metadata for {data_type:?} requires preferred locales")]
+    #[error(
+        "credential {credential_id} ts12 metadata for {data_type:?} requires preferred locales"
+    )]
     MissingPreferredLocales {
         credential_id: String,
         data_type: TransactionDataType,
@@ -189,7 +189,9 @@ pub enum OpenId4VpError {
     #[error("dcql query via scope is not supported")]
     DcqlScopeUnsupported,
     /// Transaction data cannot be satisfied by the DCQL query.
-    #[error("transaction_data[{index}] has no matching credential in dcql_query: {credential_ids:?}")]
+    #[error(
+        "transaction_data[{index}] has no matching credential in dcql_query: {credential_ids:?}"
+    )]
     TransactionDataUnsatisfied {
         index: usize,
         credential_ids: Vec<String>,
@@ -221,7 +223,9 @@ pub enum OpenId4VciError {
     #[error("credential_configuration_ids must be unique")]
     CredentialConfigurationIdsNotUnique,
     /// OpenID4VCI request does not contain a credential offer.
-    #[error("request data must contain credential_offer/credential_offer_uri or be a credential_offer object")]
+    #[error(
+        "request data must contain credential_offer/credential_offer_uri or be a credential_offer object"
+    )]
     MissingCredentialOffer,
 }
 

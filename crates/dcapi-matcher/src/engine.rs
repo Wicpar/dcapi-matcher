@@ -11,21 +11,23 @@ use crate::models::{
 use crate::profile::{Profile, ProfileError};
 use crate::traits::{DcqlSelectionContext, MatcherStore};
 use crate::ts12;
-use alloc::boxed::Box;
 use alloc::borrow::Cow;
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use android_credman::get_request_string;
 use android_credman::{
     CredentialEntry, CredentialSet, CredentialSlot, Field, InlineIssuanceEntry, MatcherResponse,
     PaymentEntry, StringIdEntry,
 };
-use android_credman::get_request_string;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use c8str::{C8Str, C8String, c8format};
 use core::ffi::CStr;
 use core::hash::Hash;
-use dcapi_dcql::{CredentialFormat, PathElement, PlanOptions, SelectionAlternative, TransactionData};
+use dcapi_dcql::{
+    CredentialFormat, PathElement, PlanOptions, SelectionAlternative, TransactionData,
+};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -621,10 +623,7 @@ where
             continue;
         };
         let value = store.get_credential_field_value(cred, &claim.path);
-        fields.push(Field::new(
-            cstr_from_cow(label),
-            value.map(cstr_from_cow),
-        ));
+        fields.push(Field::new(cstr_from_cow(label), value.map(cstr_from_cow)));
     }
     let metadata = build_metadata(context)?;
 
@@ -660,7 +659,9 @@ where
     Ok(CredentialEntry::StringId(entry))
 }
 
-fn build_metadata(context: &DcqlSelectionContext<'_>) -> Result<Option<&'static CStr>, MatcherError> {
+fn build_metadata(
+    context: &DcqlSelectionContext<'_>,
+) -> Result<Option<&'static CStr>, MatcherError> {
     let mut obj = serde_json::Map::new();
     obj.insert(
         "credential_id".to_string(),

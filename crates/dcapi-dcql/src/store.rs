@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
 use crate::CredentialReader;
 use crate::models::{ClaimValue, ClaimsQuery, CredentialQuery, TransactionData, TrustedAuthority};
 use crate::path::ClaimsPathPointer;
+use serde::{Deserialize, Serialize};
 
 /// Normalized credential format identifiers used by the planner.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -17,7 +17,11 @@ pub enum CredentialFormat {
 
 impl From<&str> for CredentialFormat {
     fn from(value: &str) -> Self {
-        match value { "mso_mdoc" => Self::MsoMdoc, "dc+sd-jwt" => Self::DcSdJwt, _ => Self::Unknown }
+        match value {
+            "mso_mdoc" => Self::MsoMdoc,
+            "dc+sd-jwt" => Self::DcSdJwt,
+            _ => Self::Unknown,
+        }
     }
 }
 
@@ -39,7 +43,9 @@ pub trait CredentialStore {
     type ReadError: std::error::Error;
 
     /// Build a store from a credentials reader.
-    fn from_reader(reader: &mut dyn std::io::Read) -> Result<Self, Self::ReadError> where Self: Sized;
+    fn from_reader(reader: &mut dyn std::io::Read) -> Result<Self, Self::ReadError>
+    where
+        Self: Sized;
 
     /// Build a store from the default credentials reader.
     fn read() -> Result<Self, Self::ReadError>

@@ -1,5 +1,5 @@
-use core::convert::Infallible;
 use crate::models::{OpenId4VciRequest, OpenId4VpRequest};
+use core::convert::Infallible;
 use dcapi_dcql::{ClaimsQuery, CredentialQuery};
 use thiserror::Error;
 
