@@ -169,10 +169,10 @@ pub fn path_matches(pattern: &ClaimsPathPointer, actual: &ClaimsPathPointer) -> 
 
 /// Returns true only for valid mdoc claims paths (`[namespace, element_identifier]`).
 pub fn is_mdoc_path(path: &ClaimsPathPointer) -> bool {
-    if path.len() != 2 {
-        return false;
-    }
-    matches!(path[0], PathElement::String(_)) && matches!(path[1], PathElement::String(_))
+    matches!(
+        path.as_slice(),
+        [PathElement::String(_), PathElement::String(_)]
+    )
 }
 
 fn json_type_name(value: &Value) -> &'static str {

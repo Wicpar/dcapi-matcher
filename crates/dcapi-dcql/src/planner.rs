@@ -213,13 +213,17 @@ where
                 continue;
             }
 
+            if assignment.transaction_credential_ids.len() != transaction_data.len() {
+                continue;
+            }
             let transaction_data_assignments = assignment
                 .transaction_credential_ids
                 .iter()
+                .zip(transaction_data.iter())
                 .enumerate()
-                .map(|(index, credential_id)| TransactionDataAssignment {
+                .map(|(index, (credential_id, data))| TransactionDataAssignment {
                     index,
-                    transaction_data: transaction_data[index].clone(),
+                    transaction_data: data.clone(),
                     credential_id: credential_id.clone(),
                 })
                 .collect();
@@ -711,7 +715,7 @@ where
     }
 
     let mut order: Vec<usize> = (0..transaction_data.len()).collect();
-    order.sort_by_key(|idx| options_by_td[*idx].len());
+    order.sort_by_key(|idx| options_by_td.get(*idx).map(|set| set.len()).unwrap_or(0));
 
     let mut transaction_credential_ids = vec![String::new(); transaction_data.len()];
     let mut out = Vec::new();
@@ -724,7 +728,7 @@ where
         transaction_credential_ids: &mut transaction_credential_ids,
         out: &mut out,
     };
-    backtrack_transaction_assignments(&mut ctx, 0);
+    let _ = backtrack_transaction_assignments(&mut ctx, 0);
     out
 }
 
@@ -741,7 +745,8 @@ struct TransactionBacktrack<'a, S: CredentialStore + ?Sized> {
 fn backtrack_transaction_assignments<S>(
     ctx: &mut TransactionBacktrack<'_, S>,
     depth: usize,
-) where
+) -> Option<()>
+where
     S: CredentialStore + ?Sized,
     S::CredentialRef: Clone,
 {
@@ -750,13 +755,14 @@ fn backtrack_transaction_assignments<S>(
             transaction_credential_ids: ctx.transaction_credential_ids.to_vec(),
             domains: ctx.domains.clone(),
         });
-        return;
+        return Some(());
     }
 
-    let td_idx = ctx.order[depth];
-    let td = &ctx.transaction_data[td_idx];
+    let &td_idx = ctx.order.get(depth)?;
+    let td = ctx.transaction_data.get(td_idx)?;
+    let options = ctx.options_by_td.get(td_idx)?;
 
-    for id in &ctx.options_by_td[td_idx] {
+    for id in options {
         let Some(current_domain) = ctx.domains.get(id).cloned() else {
             continue;
         };
@@ -771,13 +777,18 @@ fn backtrack_transaction_assignments<S>(
         }
 
         ctx.domains.insert(id.clone(), filtered_domain);
-        ctx.transaction_credential_ids[td_idx] = id.clone();
+        {
+            let selected_id = ctx.transaction_credential_ids.get_mut(td_idx)?;
+            *selected_id = id.clone();
+        }
 
-        backtrack_transaction_assignments(ctx, depth + 1);
+        backtrack_transaction_assignments(ctx, depth + 1)?;
 
-        ctx.transaction_credential_ids[td_idx].clear();
+        ctx.transaction_credential_ids.get_mut(td_idx)?.clear();
         ctx.domains.insert(id.clone(), current_domain);
     }
+
+    Some(())
 }
 
 /// Helper to build a claims path pointer from string components.

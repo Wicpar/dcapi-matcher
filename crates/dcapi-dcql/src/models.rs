@@ -210,10 +210,9 @@ fn validate_dcql_query(value: &DcqlQuery) -> Result<(), String> {
 
 fn validate_credential_query_common(value: &CredentialQueryCommon) -> Result<(), String> {
     if value.claim_sets.is_some() {
-        if value.claims.is_none() {
+        let Some(claims) = value.claims.as_ref() else {
             return Err(format!("claim_sets without claims: {}", value.id));
-        }
-        let claims = value.claims.as_ref().unwrap();
+        };
         if claims.iter().any(|claim| claim.id.is_none()) {
             return Err(format!("claims missing id: {}", value.id));
         }

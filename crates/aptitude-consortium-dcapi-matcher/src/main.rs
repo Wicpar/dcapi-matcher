@@ -1,4 +1,4 @@
-use android_credman::{CredmanRender, CredentialReader};
+use android_credman::CredmanRender;
 use base64::Engine;
 use dcapi_dcql::{
     ClaimValue, ClaimsPathPointer, CredentialFormat, CredentialStore, PlanOptions, TransactionData,
@@ -8,9 +8,9 @@ use dcapi_matcher::diagnostics::error;
 use dcapi_matcher::{
     DefaultProfile, LogLevel, MatcherOptions, MatcherStore, OpenId4VciConfig, OpenId4VpConfig,
     Ts12ClaimMetadata, Ts12LocalizedLabel, Ts12LocalizedValue, Ts12TransactionMetadata, Ts12UiLabels,
-    dcapi_matcher, decode_json_package, match_dc_api_request,
+    dcapi_matcher, match_dc_api_request,
 };
-use c8str::{C8Str, C8String, c8format};
+use c8str::{C8Str, C8String, c8, c8format};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::borrow::Cow;
@@ -247,10 +247,11 @@ struct PackageStore {
     openid4vp: OpenId4VpConfig,
     openid4vci: OpenId4VciConfig,
     log_level: Option<LogLevel>,
+    dcql: PlanOptions,
 }
 
 impl PackageStore {
-    fn from_config(config: PackageConfig) -> Result<(Self, PlanOptions), String> {
+    fn from_config(config: PackageConfig) -> Result<Self, String> {
         let default_prefix = config.default_id_prefix.as_deref();
 
         let credentials = config
@@ -269,19 +270,21 @@ impl PackageStore {
             })
             .collect::<Vec<_>>();
 
-        Ok((
-            Self {
-                credentials,
-                openid4vp: config.openid4vp,
-                openid4vci: config.openid4vci,
-                log_level: config.log_level,
-            },
-            config.dcql,
-        ))
+        Ok(Self {
+            credentials,
+            openid4vp: config.openid4vp,
+            openid4vci: config.openid4vci,
+            log_level: config.log_level,
+            dcql: config.dcql,
+        })
     }
 
-    fn get(&self, idx: usize) -> &ResolvedCredential {
-        &self.credentials[idx]
+    fn get(&self, idx: usize) -> Option<&ResolvedCredential> {
+        self.credentials.get(idx)
+    }
+
+    fn dcql_options(&self) -> PlanOptions {
+        self.dcql
     }
 }
 
@@ -294,9 +297,8 @@ impl CredentialStore for PackageStore {
             serde_json::from_reader(reader).map_err(|err| {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, err)
             })?;
-        let (store, _) = Self::from_config(config)
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-        Ok(store)
+        Self::from_config(config)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
     }
 
     fn list_credentials(&self, format: Option<CredentialFormat>) -> Vec<Self::CredentialRef> {
@@ -309,19 +311,28 @@ impl CredentialStore for PackageStore {
     }
 
     fn format(&self, cred: &Self::CredentialRef) -> CredentialFormat {
-        self.get(*cred).format
+        self.get(*cred)
+            .map(|credential| credential.format)
+            .unwrap_or(CredentialFormat::Unknown)
     }
 
     fn has_vct(&self, cred: &Self::CredentialRef, vct: &str) -> bool {
-        self.get(*cred).vcts.iter().any(|entry| entry == vct)
+        self.get(*cred)
+            .map(|credential| credential.vcts.iter().any(|entry| entry == vct))
+            .unwrap_or(false)
     }
 
     fn supports_holder_binding(&self, cred: &Self::CredentialRef) -> bool {
-        self.get(*cred).holder_binding
+        self.get(*cred)
+            .map(|credential| credential.holder_binding)
+            .unwrap_or(false)
     }
 
     fn has_doctype(&self, cred: &Self::CredentialRef, doctype: &str) -> bool {
-        self.get(*cred).doctype.as_deref() == Some(doctype)
+        self.get(*cred)
+            .and_then(|credential| credential.doctype.as_deref())
+            .map(|value| value == doctype)
+            .unwrap_or(false)
     }
 
     fn can_sign_transaction_data(
@@ -330,13 +341,18 @@ impl CredentialStore for PackageStore {
         transaction_data: &TransactionData,
     ) -> bool {
         self.get(*cred)
-            .transaction_data_types
-            .iter()
-            .any(|entry| entry == &transaction_data.data_type)
+            .map(|credential| {
+                credential
+                    .transaction_data_types
+                    .iter()
+                    .any(|entry| entry == &transaction_data.data_type)
+            })
+            .unwrap_or(false)
     }
 
     fn has_claim_path(&self, cred: &Self::CredentialRef, path: &ClaimsPathPointer) -> bool {
-        dcapi_dcql::select_nodes(&self.get(*cred).claims, path)
+        self.get(*cred)
+            .and_then(|credential| dcapi_dcql::select_nodes(&credential.claims, path).ok())
             .map(|nodes| !nodes.is_empty())
             .unwrap_or(false)
     }
@@ -347,7 +363,10 @@ impl CredentialStore for PackageStore {
         path: &ClaimsPathPointer,
         expected_values: &[ClaimValue],
     ) -> ValueMatch {
-        let Ok(nodes) = dcapi_dcql::select_nodes(&self.get(*cred).claims, path) else {
+        let Some(credential) = self.get(*cred) else {
+            return ValueMatch::NoMatch;
+        };
+        let Ok(nodes) = dcapi_dcql::select_nodes(&credential.claims, path) else {
             return ValueMatch::NoMatch;
         };
         for node in nodes {
@@ -365,45 +384,55 @@ impl CredentialStore for PackageStore {
 
 impl MatcherStore for PackageStore {
     fn credential_id<'a>(&'a self, cred: &Self::CredentialRef) -> Cow<'a, C8Str> {
-        Cow::Borrowed(self.get(*cred).id.as_c8_str())
+        self.get(*cred)
+            .map(|credential| Cow::Borrowed(credential.id.as_c8_str()))
+            .unwrap_or(Cow::Borrowed(c8!("")))
     }
 
     fn credential_title<'a>(&'a self, cred: &Self::CredentialRef) -> Cow<'a, C8Str> {
-        Cow::Borrowed(self.get(*cred).title.as_c8_str())
+        self.get(*cred)
+            .map(|credential| Cow::Borrowed(credential.title.as_c8_str()))
+            .unwrap_or(Cow::Borrowed(c8!("")))
     }
 
     fn credential_subtitle<'a>(
         &'a self,
         cred: &Self::CredentialRef,
     ) -> Option<Cow<'a, C8Str>> {
-        self.get(*cred)
-            .subtitle
-            .as_ref()
-            .map(|value| Cow::Borrowed(value.as_c8_str()))
+        self.get(*cred).and_then(|credential| {
+            credential
+                .subtitle
+                .as_ref()
+                .map(|value| Cow::Borrowed(value.as_c8_str()))
+        })
     }
 
     fn credential_disclaimer<'a>(
         &'a self,
         cred: &Self::CredentialRef,
     ) -> Option<Cow<'a, C8Str>> {
-        self.get(*cred)
-            .disclaimer
-            .as_ref()
-            .map(|value| Cow::Borrowed(value.as_c8_str()))
+        self.get(*cred).and_then(|credential| {
+            credential
+                .disclaimer
+                .as_ref()
+                .map(|value| Cow::Borrowed(value.as_c8_str()))
+        })
     }
 
     fn credential_warning<'a>(
         &'a self,
         cred: &Self::CredentialRef,
     ) -> Option<Cow<'a, C8Str>> {
-        self.get(*cred)
-            .warning
-            .as_ref()
-            .map(|value| Cow::Borrowed(value.as_c8_str()))
+        self.get(*cred).and_then(|credential| {
+            credential
+                .warning
+                .as_ref()
+                .map(|value| Cow::Borrowed(value.as_c8_str()))
+        })
     }
 
     fn credential_icon<'a>(&'a self, cred: &Self::CredentialRef) -> Option<&'a [u8]> {
-        self.get(*cred).icon.as_deref()
+        self.get(*cred).and_then(|credential| credential.icon.as_deref())
     }
 
     fn get_credential_field_label<'a>(
@@ -414,7 +443,9 @@ impl MatcherStore for PackageStore {
         if path_has_wildcard(path) {
             return None;
         }
-        let credential = self.get(*cred);
+        let Some(credential) = self.get(*cred) else {
+            return None;
+        };
         if let Some(metadata) = credential.metadata.as_ref()
             && let Some(display_name) = claim_display_name_from_metadata(metadata, path)
         {
@@ -435,7 +466,9 @@ impl MatcherStore for PackageStore {
         if path_has_wildcard(path) {
             return None;
         }
-        let credential = self.get(*cred);
+        let Some(credential) = self.get(*cred) else {
+            return None;
+        };
         if let Some(field) = credential
             .fields
             .iter()
@@ -450,10 +483,10 @@ impl MatcherStore for PackageStore {
     }
 
     fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
-        match self.get(*cred).protocols.as_deref() {
-            None => true,
-            Some(protocols) => protocols.iter().any(|entry| entry == protocol),
-        }
+        self.get(*cred)
+            .and_then(|credential| credential.protocols.as_deref())
+            .map(|protocols| protocols.iter().any(|entry| entry == protocol))
+            .unwrap_or(false)
     }
 
     fn openid4vp_config(&self) -> OpenId4VpConfig {
@@ -478,11 +511,13 @@ impl MatcherStore for PackageStore {
         cred: &Self::CredentialRef,
         transaction_data: &dcapi_dcql::TransactionData,
     ) -> Option<Ts12TransactionMetadata<'a>> {
-        self.get(*cred)
-            .ts12_metadata
-            .iter()
-            .find(|entry| entry.data_type == transaction_data.data_type)
-            .map(ResolvedTs12Metadata::as_borrowed)
+        self.get(*cred).and_then(|credential| {
+            credential
+                .ts12_metadata
+                .iter()
+                .find(|entry| entry.data_type == transaction_data.data_type)
+                .map(ResolvedTs12Metadata::as_borrowed)
+        })
     }
 }
 
@@ -643,10 +678,6 @@ fn c8string_from_str(value: &str) -> Option<C8String> {
     C8String::from_string(value.to_string()).ok()
 }
 
-fn decode_config(bytes: &[u8]) -> Option<PackageConfig> {
-    decode_json_package::<PackageConfig>(bytes).ok()
-}
-
 fn decode_icon(icon: IconConfig) -> Result<Option<Vec<u8>>, String> {
     match icon {
         IconConfig::Bytes(bytes) => Ok(if bytes.is_empty() { None } else { Some(bytes) }),
@@ -669,23 +700,11 @@ fn decode_icon(icon: IconConfig) -> Result<Option<Vec<u8>>, String> {
 
 /// Credman matcher entrypoint for aptitude consortium config packages.
 #[dcapi_matcher]
-pub fn matcher_entrypoint(mut credentials: CredentialReader) {
-    let mut buffer = Vec::new();
-    if credentials.read_to_end(&mut buffer).is_err() {
-        return;
-    }
-    let Some(config) = decode_config(&buffer) else {
-        return;
+pub fn matcher_entrypoint(store: PackageStore) {
+    dcapi_matcher::diagnostics::set_level(store.log_level);
+    let options = MatcherOptions {
+        dcql: store.dcql_options(),
     };
-    dcapi_matcher::diagnostics::set_level(config.log_level);
-
-    let Ok((store, dcql_options)) = PackageStore::from_config(config)
-        .inspect_err(|err| error(format!("credential package validation error: {}", err)))
-    else {
-        return;
-    };
-
-    let options = MatcherOptions { dcql: dcql_options };
     let Ok(matched) = match_dc_api_request(&store, &options, &DefaultProfile) else {
         return;
     };
