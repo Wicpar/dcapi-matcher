@@ -25,6 +25,7 @@ use dcapi_dcql::{
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::io::{self, Read};
 
 #[derive(Clone)]
 struct Cred {
@@ -47,17 +48,30 @@ impl Store {
 
 impl CredentialStore for Store {
     type CredentialRef = String;
+    type ReadError = io::Error;
 
-    fn list_credentials(&self, format: Option<&str>) -> Vec<Self::CredentialRef> {
+    fn from_reader(reader: &mut dyn Read) -> Result<Self, Self::ReadError> {
+        let mut _buf = String::new();
+        reader.read_to_string(&mut _buf)?;
+        Ok(Store {
+            creds: HashMap::new(),
+        })
+    }
+
+    fn list_credentials(&self, format: Option<CredentialFormat>) -> Vec<Self::CredentialRef> {
         self.creds
             .values()
-            .filter(|c| format.map(|f| c.format == f).unwrap_or(true))
+            .filter(|c| {
+                format
+                    .map(|f| f == CredentialFormat::from(c.format.as_str()))
+                    .unwrap_or(true)
+            })
             .map(|c| c.id.clone())
             .collect()
     }
 
     fn format(&self, cred: &Self::CredentialRef) -> CredentialFormat {
-        CredentialFormat::from_query_format(&self.get(cred).format)
+        CredentialFormat::from(self.get(cred).format.as_str())
     }
 
     fn has_vct(&self, cred: &Self::CredentialRef, vct: &str) -> bool {
@@ -126,20 +140,17 @@ let store = Store {
 };
 
 let plan = plan_selection(&query, transaction_data.as_deref(), &store, &PlanOptions::default()).unwrap();
-for (outer_idx, alternative) in plan.alternatives.iter().enumerate() {
-    println!("alternative #{outer_idx}");
-    for entry in &alternative.entries {
-        println!(
-            "  credential_id={} candidates={}",
-            entry.query.id,
-            entry.query.credentials.len()
-        );
-    }
-    for assignment in &alternative.transaction_data {
-        println!(
-            "  transaction_data[{}] signed by credential_id={}",
-            assignment.index, assignment.credential_id
-        );
+for (set_idx, set) in plan.presentation_sets.iter().enumerate() {
+    println!("presentation set #{set_idx}");
+    for slot in set {
+        println!("  tx data indices: {:?}", slot.transaction_data_ids);
+        for selection in &slot.alternatives {
+            let cred_id = selection
+                .credential_id
+                .as_deref()
+                .unwrap_or("<none>");
+            println!("  selection dcql_id={} credential_id={}", selection.dcql_id, cred_id);
+        }
     }
 }
 ```

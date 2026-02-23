@@ -1,16 +1,27 @@
 {
   "result": "plan",
-  "configs": [
-    ["mdl", "pid"]
-  ],
-  "query_matches": {
-    "mdl": {
-      "credentials": ["mdoc1"],
-      "selected_claim_ids": []
-    },
-    "pid": {
-      "credentials": ["sd1"],
-      "selected_claim_ids": []
-    }
-  }
+  "presentation_sets": [
+    [
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "pid",
+            "credential_id": "sd1",
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "mdl",
+            "credential_id": "mdoc1",
+            "selected_claim_ids": []
+          }
+        ]
+      }
+    ]
+  ]
 }

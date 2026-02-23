@@ -1,48 +1,63 @@
 {
   "result": "plan",
-  "configs": [
-    ["a", "b"]
-  ],
-  "query_matches": {
-    "a": {
-      "credentials": ["a_can_t", "a_no_t"],
-      "selected_claim_ids": []
-    },
-    "b": {
-      "credentials": ["b_can_t", "b_no_t"],
-      "selected_claim_ids": []
-    }
-  },
-  "alternatives": [
-    {
-      "transaction_data": [
-        { "index": 0, "credential_id": "a" }
-      ],
-      "entries": {
-        "a": {
-          "credentials": ["a_can_t"],
-          "transaction_data_indices": [0]
-        },
-        "b": {
-          "credentials": ["b_can_t", "b_no_t"],
-          "transaction_data_indices": []
-        }
+  "presentation_sets": [
+    [
+      {
+        "transaction_data_ids": [
+          0
+        ],
+        "alternatives": [
+          {
+            "dcql_id": "a",
+            "credential_id": "a_can_t",
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "b",
+            "credential_id": "b_can_t",
+            "selected_claim_ids": []
+          },
+          {
+            "dcql_id": "b",
+            "credential_id": "b_no_t",
+            "selected_claim_ids": []
+          }
+        ]
       }
-    },
-    {
-      "transaction_data": [
-        { "index": 0, "credential_id": "b" }
-      ],
-      "entries": {
-        "a": {
-          "credentials": ["a_can_t", "a_no_t"],
-          "transaction_data_indices": []
-        },
-        "b": {
-          "credentials": ["b_can_t"],
-          "transaction_data_indices": [0]
-        }
+    ],
+    [
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "a",
+            "credential_id": "a_no_t",
+            "selected_claim_ids": []
+          },
+          {
+            "dcql_id": "a",
+            "credential_id": "a_can_t",
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [
+          0
+        ],
+        "alternatives": [
+          {
+            "dcql_id": "b",
+            "credential_id": "b_can_t",
+            "selected_claim_ids": []
+          }
+        ]
       }
-    }
+    ]
   ]
 }

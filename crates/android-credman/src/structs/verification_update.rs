@@ -1,16 +1,21 @@
 use crate::{CredmanApply, CredmanContext};
 use core::ffi::CStr;
+use std::borrow::Cow;
 
 #[derive(Debug, Clone)]
 pub struct VerificationEntryUpdate<'a> {
-    pub cred_id: &'a CStr,
-    pub secondary_disclaimer: Option<&'a CStr>,
-    pub url_display_text: Option<&'a CStr>,
-    pub url_value: Option<&'a CStr>,
+    pub cred_id: Cow<'a, CStr>,
+    pub secondary_disclaimer: Option<Cow<'a, CStr>>,
+    pub url_display_text: Option<Cow<'a, CStr>>,
+    pub url_value: Option<Cow<'a, CStr>>,
 }
 
 impl<'a> VerificationEntryUpdate<'a> {
     pub fn new(cred_id: &'a CStr) -> Self {
+        Self::new_cow(Cow::Borrowed(cred_id))
+    }
+
+    pub fn new_cow(cred_id: Cow<'a, CStr>) -> Self {
         Self {
             cred_id,
             secondary_disclaimer: None,

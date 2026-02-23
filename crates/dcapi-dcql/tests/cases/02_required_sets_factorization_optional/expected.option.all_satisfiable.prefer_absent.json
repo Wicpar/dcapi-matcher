@@ -1,18 +1,96 @@
 {
   "result": "plan",
-  "configs": [
-    ["pid"],
-    ["nice_to_have", "pid"],
-    ["other_pid"],
-    ["nice_to_have", "other_pid"],
-    ["pid_reduced_cred_1", "pid_reduced_cred_2"],
-    ["nice_to_have", "pid_reduced_cred_1", "pid_reduced_cred_2"]
-  ],
-  "query_matches": {
-    "pid": { "credentials": ["sd_pid"], "selected_claim_ids": [] },
-    "other_pid": { "credentials": ["sd_other_pid"], "selected_claim_ids": [] },
-    "pid_reduced_cred_1": { "credentials": ["sd_red1"], "selected_claim_ids": [] },
-    "pid_reduced_cred_2": { "credentials": ["sd_red2"], "selected_claim_ids": [] },
-    "nice_to_have": { "credentials": ["sd_nice"], "selected_claim_ids": [] }
-  }
+  "presentation_sets": [
+    [
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "nice_to_have",
+            "credential_id": "sd_nice",
+            "selected_claim_ids": []
+          },
+          {
+            "dcql_id": "nice_to_have",
+            "credential_id": null,
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "pid",
+            "credential_id": "sd_pid",
+            "selected_claim_ids": []
+          }
+        ]
+      }
+    ],
+    [
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "nice_to_have",
+            "credential_id": "sd_nice",
+            "selected_claim_ids": []
+          },
+          {
+            "dcql_id": "nice_to_have",
+            "credential_id": null,
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "other_pid",
+            "credential_id": "sd_other_pid",
+            "selected_claim_ids": []
+          }
+        ]
+      }
+    ],
+    [
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "nice_to_have",
+            "credential_id": "sd_nice",
+            "selected_claim_ids": []
+          },
+          {
+            "dcql_id": "nice_to_have",
+            "credential_id": null,
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "pid_reduced_cred_1",
+            "credential_id": "sd_red1",
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "pid_reduced_cred_2",
+            "credential_id": "sd_red2",
+            "selected_claim_ids": []
+          }
+        ]
+      }
+    ]
+  ]
 }

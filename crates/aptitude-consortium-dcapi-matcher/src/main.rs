@@ -877,7 +877,11 @@ mod tests {
         let mut has_given = false;
         for field in fields {
             let name = field.display_name.to_str().unwrap_or("");
-            let value = field.display_value.and_then(|value| value.to_str().ok()).unwrap_or("");
+            let value = field
+                .display_value
+                .as_deref()
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("");
             if name == "Family Name" && value == "Glastra" {
                 has_family = true;
             }

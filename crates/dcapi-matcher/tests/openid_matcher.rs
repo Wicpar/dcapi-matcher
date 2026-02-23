@@ -46,7 +46,7 @@ fn c8string(value: &str) -> C8String {
     c8format!("{value}")
 }
 
-fn transaction_data_subtype<'a>(transaction_data: &'a dcapi_dcql::TransactionData) -> Option<&'a str> {
+fn transaction_data_subtype(transaction_data: &dcapi_dcql::TransactionData) -> Option<&str> {
     transaction_data
         .extra
         .get("subtype")
@@ -585,8 +585,8 @@ fn entry_metadata<'a>(entry: &'a CredentialEntry<'a>) -> Option<&'a CStr> {
 
 fn entry_cred_id<'a>(entry: &'a CredentialEntry<'a>) -> &'a CStr {
     match entry {
-        CredentialEntry::StringId(entry) => entry.cred_id,
-        CredentialEntry::Payment(entry) => entry.cred_id,
+        CredentialEntry::StringId(entry) => &entry.cred_id,
+        CredentialEntry::Payment(entry) => &entry.cred_id,
     }
 }
 
@@ -649,6 +649,43 @@ fn openid4vp_dcql_generates_selection_sets() {
 }
 
 #[test]
+fn openid4vp_dcql_single_set_with_multiple_options_merges_alternatives() {
+    let store = test_store();
+    let request = json!({
+        "requests": [{
+            "protocol": PROTOCOL_OPENID4VP_V1_UNSIGNED,
+            "data": {
+                "dcql_query": {
+                    "credentials": [
+                        { "id": "pid", "format": "dc+sd-jwt", "meta": { "vct_values": ["vct:pid"] } },
+                        { "id": "mdl", "format": "mso_mdoc", "meta": { "doctype_value": "org.iso.18013.5.1.mDL" } }
+                    ],
+                    "credential_sets": [
+                        { "required": true, "options": [["pid"], ["mdl"]] }
+                    ]
+                }
+            }
+        }]
+    })
+    .to_string();
+
+    let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
+    assert_eq!(response.results.len(), 1);
+    let MatcherResult::Group(set) = &response.results[0] else {
+        panic!("expected group");
+    };
+    assert_eq!(set.slots.len(), 1);
+
+    let mut alt_ids = set.slots[0]
+        .alternatives
+        .iter()
+        .filter_map(|entry| entry_cred_id(entry).to_str().ok().map(str::to_string))
+        .collect::<Vec<_>>();
+    alt_ids.sort();
+    assert_eq!(alt_ids, vec!["mdl-1".to_string(), "pid-1".to_string(), "pid-2".to_string()]);
+}
+
+#[test]
 fn openid4vp_dcql_order_prefers_optional_presence_in_first_alternative() {
     let store = test_store();
     let request = json!({
@@ -672,12 +709,35 @@ fn openid4vp_dcql_order_prefers_optional_presence_in_first_alternative() {
 
     let response = match_dc_api_request(&request, &store, &MatcherOptions::default()).unwrap();
     let configs = collect_set_configs(&response);
+    assert_eq!(configs, vec![vec!["mdl".to_string(), "pid".to_string()]]);
+
+    let MatcherResult::Group(set) = &response.results[0] else {
+        panic!("expected group");
+    };
+    let optional_slot = set
+        .slots
+        .iter()
+        .find(|slot| {
+            slot.alternatives
+                .iter()
+                .any(|entry| entry_cred_id(entry).to_str().ok() == Some("mdl-1"))
+        })
+        .expect("expected slot containing mdl credential");
+    let alt_ids = optional_slot
+        .alternatives
+        .iter()
+        .filter_map(|entry| entry_cred_id(entry).to_str().ok())
+        .collect::<Vec<_>>();
+    assert!(
+        alt_ids.iter().any(|id| id.starts_with("__none__")),
+        "expected optional slot to include __none__ alternative"
+    );
     assert_eq!(
-        configs,
-        vec![
-            vec!["mdl".to_string(), "pid".to_string()],
-            vec!["pid".to_string()]
-        ]
+        optional_slot
+            .alternatives
+            .first()
+            .and_then(|entry| entry_cred_id(entry).to_str().ok()),
+        Some("mdl-1")
     );
 }
 
@@ -713,7 +773,8 @@ fn openid4vp_transaction_data_encoded_is_decoded_and_attached() {
     let metadata = entry_metadata(first)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
-    assert!(metadata.contains("\"credential_id\":\"pid\""));
+    assert!(metadata.contains("\"dcql_id\":\"pid\""));
+    assert!(metadata.contains("\"credential_id\":\"pid-1\""));
     assert!(metadata.contains("\"transaction_data_indices\":[0]"));
 }
 
@@ -1116,8 +1177,10 @@ fn metadata_preserves_object_key_order() {
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
     let pos_credential = metadata.find("\"credential_id\"").unwrap();
+    let pos_dcql = metadata.find("\"dcql_id\"").unwrap();
     let pos_indices = metadata.find("\"transaction_data_indices\"").unwrap();
-    assert!(pos_credential < pos_indices);
+    assert!(pos_credential < pos_dcql);
+    assert!(pos_dcql < pos_indices);
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]

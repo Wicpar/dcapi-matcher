@@ -35,6 +35,7 @@ pub struct DcApiRequest {
 /// One protocol request in the DC API request list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "protocol")]
+#[allow(clippy::large_enum_variant)]
 pub enum DcApiRequestItem {
     /// OpenID4VP over DC API (unsigned).
     #[serde(rename = "openid4vp-v1-unsigned", alias = "openid4vp")]
@@ -53,6 +54,7 @@ pub enum DcApiRequestItem {
 /// OpenID4VP unsigned request data payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
 pub enum OpenId4VpUnsignedData {
     /// Request parameters as JSON object.
     Params(OpenId4VpRequest),

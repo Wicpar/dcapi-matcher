@@ -10,8 +10,7 @@ pub use path::{
     ClaimsPathPointer, PathElement, PathError, is_mdoc_path, path_matches, select_nodes,
 };
 pub use planner::{
-    CredentialSetOptionMode, OptionalCredentialSetsMode, PlanError, PlanOptions, QueryMatches,
-    SelectionAlternative, SelectionEntry, SelectionPlan, TransactionDataAssignment, plan_selection,
-    pointer_from_strings,
+    CredentialSelection, CredentialSetOptionMode, DcqlOutput, OptionalCredentialSetsMode, PlanError,
+    PlanOptions, PresentationSet, QueryMatches, SetAlternative, plan_selection, pointer_from_strings,
 };
 pub use store::{CredentialFormat, CredentialStore, ValueMatch};

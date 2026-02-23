@@ -1,17 +1,43 @@
 {
   "result": "plan",
-  "configs": [
-    ["a"],
-    ["a", "b"]
-  ],
-  "query_matches": {
-    "a": {
-      "credentials": ["a_with_t"],
-      "selected_claim_ids": []
-    },
-    "b": {
-      "credentials": ["b_without_t"],
-      "selected_claim_ids": []
-    }
-  }
+  "presentation_sets": [
+    [
+      {
+        "transaction_data_ids": [
+          0
+        ],
+        "alternatives": [
+          {
+            "dcql_id": "a",
+            "credential_id": "a_with_t",
+            "selected_claim_ids": []
+          }
+        ]
+      }
+    ],
+    [
+      {
+        "transaction_data_ids": [
+          0
+        ],
+        "alternatives": [
+          {
+            "dcql_id": "a",
+            "credential_id": "a_with_t",
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "b",
+            "credential_id": "b_without_t",
+            "selected_claim_ids": []
+          }
+        ]
+      }
+    ]
+  ]
 }

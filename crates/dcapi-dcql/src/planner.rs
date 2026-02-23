@@ -4,7 +4,7 @@ use crate::models::{
 };
 use crate::path::{ClaimsPathPointer, PathElement};
 use crate::store::{CredentialFormat, CredentialStore, ValueMatch};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -73,40 +73,52 @@ impl Default for PlanOptions {
 
 /// One entry in an inner selection set.
 #[derive(Debug, Clone)]
-pub struct SelectionEntry<C> {
-    /// Whether this credential id is mandatory across all alternatives.
-    pub required: bool,
+struct SelectionEntry<C> {
     /// Query context and selectable credential candidates for this id.
-    pub query: QueryMatches<C>,
+    query: QueryMatches<C>,
     /// Transaction data indices that are bound to this credential id in this alternative.
-    pub transaction_data_indices: Vec<usize>,
-}
-
-/// One explicit transaction-data assignment.
-#[derive(Debug, Clone)]
-pub struct TransactionDataAssignment {
-    /// Index in the input `transaction_data` array.
-    pub index: usize,
-    /// Transaction data object.
-    pub transaction_data: TransactionData,
-    /// Credential Query id selected to authorize this transaction data entry.
-    pub credential_id: String,
+    transaction_data_indices: Vec<usize>,
 }
 
 /// One inner set: credentials presented together with bound transaction-data assignments.
 #[derive(Debug, Clone)]
-pub struct SelectionAlternative<C> {
+struct SelectionAlternative<C> {
     /// Independent per-id choices available to the UI.
-    pub entries: Vec<SelectionEntry<C>>,
-    /// Transaction data bindings that must be kept together with entry selection.
-    pub transaction_data: Vec<TransactionDataAssignment>,
+    entries: Vec<SelectionEntry<C>>,
 }
 
-/// Full UI-oriented selection plan.
+/// One selectable credential (or explicit empty choice) for a DCQL slot.
 #[derive(Debug, Clone)]
-pub struct SelectionPlan<C> {
-    /// Outer alternatives. Picking one yields one coherent inner set.
-    pub alternatives: Vec<SelectionAlternative<C>>,
+pub struct CredentialSelection<C> {
+    /// DCQL credential query id for this selection.
+    pub dcql_id: String,
+    /// Concrete credential reference, or `None` when representing "no credential".
+    pub credential_id: Option<C>,
+    /// Selected claim constraints for this dcql id.
+    pub selected_claims: Vec<ClaimsQuery>,
+}
+
+/// One slot inside a presentation set.
+///
+/// The slot exposes multiple alternative credentials (potentially from
+/// different dcql ids). All alternatives in the slot must share the same
+/// transaction-data indices.
+#[derive(Debug, Clone)]
+pub struct SetAlternative<C> {
+    /// Alternative credentials for this slot.
+    pub alternatives: Vec<CredentialSelection<C>>,
+    /// Transaction-data indices bound to this slot.
+    pub transaction_data_ids: Vec<usize>,
+}
+
+/// A presentation set is a list of slots presented together.
+pub type PresentationSet<C> = Vec<SetAlternative<C>>;
+
+/// DCQL planner output, optimized for credential selection UI.
+#[derive(Debug, Clone)]
+pub struct DcqlOutput<C> {
+    /// Presentation sets covering all valid DCQL combinations.
+    pub presentation_sets: Vec<PresentationSet<C>>,
 }
 
 /// Query planning error.
@@ -122,20 +134,19 @@ pub enum PlanError {
     Unsatisfied,
 }
 
-/// Build a UI-oriented selection plan from DCQL and optional transaction data.
+/// Build a UI-oriented presentation plan from DCQL and optional transaction data.
 ///
-/// The output is structured so that each `SelectionAlternative` can be rendered as one
-/// coherent "present + sign" choice. Inside one alternative, choosing a credential for one id
-/// does not invalidate choices for other ids.
+/// The output is a list of presentation sets. Each set contains independent slots with
+/// alternative credentials, and all transaction-data constraints are preserved.
 pub fn plan_selection<S>(
     query: &DcqlQuery,
     transaction_data: Option<&[TransactionData]>,
     store: &S,
     options: &PlanOptions,
-) -> Result<SelectionPlan<S::CredentialRef>, PlanError>
+) -> Result<DcqlOutput<S::CredentialRef>, PlanError>
 where
     S: CredentialStore,
-    S::CredentialRef: Clone,
+    S::CredentialRef: Clone + Eq + std::hash::Hash,
 {
     let mut matches_by_id = BTreeMap::new();
     let mut query_by_id = BTreeMap::new();
@@ -158,7 +169,6 @@ where
         return Err(PlanError::Unsatisfied);
     }
 
-    let required_ids = intersection(&configs);
     let transaction_data = transaction_data.unwrap_or_default();
 
     let mut alternatives = Vec::new();
@@ -166,8 +176,9 @@ where
         let assignments =
             enumerate_transaction_assignments(store, &config, &matches_by_id, transaction_data);
         for assignment in assignments {
+            let ordered_ids = order_config_ids(query, &config);
             let mut entries = Vec::new();
-            for id in &config {
+            for id in &ordered_ids {
                 let Some(base_query) = matches_by_id.get(id) else {
                     continue;
                 };
@@ -199,7 +210,6 @@ where
                     .collect();
 
                 entries.push(SelectionEntry {
-                    required: required_ids.contains(id),
                     query: query_match,
                     transaction_data_indices,
                 });
@@ -216,22 +226,7 @@ where
             if assignment.transaction_credential_ids.len() != transaction_data.len() {
                 continue;
             }
-            let transaction_data_assignments = assignment
-                .transaction_credential_ids
-                .iter()
-                .zip(transaction_data.iter())
-                .enumerate()
-                .map(|(index, (credential_id, data))| TransactionDataAssignment {
-                    index,
-                    transaction_data: data.clone(),
-                    credential_id: credential_id.clone(),
-                })
-                .collect();
-
-            alternatives.push(SelectionAlternative {
-                entries,
-                transaction_data: transaction_data_assignments,
-            });
+            alternatives.push(SelectionAlternative { entries });
         }
     }
 
@@ -239,7 +234,354 @@ where
         return Err(PlanError::Unsatisfied);
     }
 
-    Ok(SelectionPlan { alternatives })
+    Ok(build_presentation_sets(query, alternatives))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum SlotKey {
+    SimpleSet {
+        set_index: usize,
+        transaction_data_ids: Vec<usize>,
+    },
+    QueryId {
+        id: String,
+        transaction_data_ids: Vec<usize>,
+    },
+}
+
+impl SlotKey {
+    fn transaction_data_ids(&self) -> &[usize] {
+        match self {
+            SlotKey::SimpleSet {
+                transaction_data_ids,
+                ..
+            }
+            | SlotKey::QueryId {
+                transaction_data_ids,
+                ..
+            } => transaction_data_ids.as_slice(),
+        }
+    }
+
+    fn simple_set_index(&self) -> Option<usize> {
+        match self {
+            SlotKey::SimpleSet { set_index, .. } => Some(*set_index),
+            SlotKey::QueryId { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SlotEntry<C> {
+    dcql_id: String,
+    selected_claims: Vec<ClaimsQuery>,
+    credentials: Vec<C>,
+}
+
+#[derive(Debug, Clone)]
+struct SlotGroup<C> {
+    slot_keys: Vec<SlotKey>,
+    slot_entries: BTreeMap<SlotKey, Vec<SlotEntry<C>>>,
+}
+
+#[derive(Debug, Clone)]
+struct SlotCluster<C> {
+    required_key: Vec<SlotKey>,
+    slot_entries: BTreeMap<SlotKey, Vec<SlotEntry<C>>>,
+    optional_slot_keys: BTreeMap<usize, SlotKey>,
+    optional_slot_counts: BTreeMap<SlotKey, usize>,
+    group_count: usize,
+}
+
+fn build_presentation_sets<C>(
+    query: &DcqlQuery,
+    alternatives: Vec<SelectionAlternative<C>>,
+) -> DcqlOutput<C>
+where
+    C: Clone + Eq + std::hash::Hash,
+{
+    let (simple_set_by_id, optional_simple_sets) = analyze_simple_sets(query);
+    let mut groups = Vec::<SlotGroup<C>>::new();
+    let mut group_index = FxHashMap::<Vec<SlotKey>, usize>::default();
+
+    for alternative in alternatives {
+        let mut slot_map = Vec::<(SlotKey, SlotEntry<C>)>::new();
+        for entry in alternative.entries {
+            let mut transaction_data_indices = entry.transaction_data_indices.clone();
+            transaction_data_indices.sort_unstable();
+
+            let slot_key = if let Some(set_index) = simple_set_by_id.get(&entry.query.id) {
+                SlotKey::SimpleSet {
+                    set_index: *set_index,
+                    transaction_data_ids: transaction_data_indices,
+                }
+            } else {
+                SlotKey::QueryId {
+                    id: entry.query.id.clone(),
+                    transaction_data_ids: transaction_data_indices,
+                }
+            };
+
+            slot_map.push((
+                slot_key,
+                SlotEntry {
+                    dcql_id: entry.query.id.clone(),
+                    selected_claims: entry.query.selected_claims.clone(),
+                    credentials: entry.query.credentials.clone(),
+                },
+            ));
+        }
+
+        let slot_keys = slot_map.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>();
+        let group_idx = if let Some(index) = group_index.get(&slot_keys).copied() {
+            index
+        } else {
+            let index = groups.len();
+            groups.push(SlotGroup {
+                slot_keys: slot_keys.clone(),
+                slot_entries: BTreeMap::new(),
+            });
+            group_index.insert(slot_keys.clone(), index);
+            index
+        };
+
+        let group = groups.get_mut(group_idx).expect("group index valid");
+        for (slot_key, entry) in slot_map {
+            group
+                .slot_entries
+                .entry(slot_key)
+                .or_default()
+                .push(entry);
+        }
+    }
+
+    let mut clusters: Vec<SlotCluster<C>> = Vec::new();
+    for group in groups {
+        let (required_key, optional_map) = partition_slot_keys(&group.slot_keys, &optional_simple_sets);
+
+        let mut merged = false;
+        for cluster in &mut clusters {
+            if cluster.required_key != required_key {
+                continue;
+            }
+            if !can_merge_optional_slots(cluster, &optional_map) {
+                continue;
+            }
+            merge_group_into_cluster(cluster, &group, &optional_map);
+            merged = true;
+            break;
+        }
+
+        if !merged {
+            let mut cluster = SlotCluster {
+                required_key,
+                slot_entries: BTreeMap::new(),
+                optional_slot_keys: BTreeMap::new(),
+                optional_slot_counts: BTreeMap::new(),
+                group_count: 0,
+            };
+            merge_group_into_cluster(&mut cluster, &group, &optional_map);
+            clusters.push(cluster);
+        }
+    }
+
+    let mut presentation_sets = Vec::new();
+    for cluster in clusters {
+        let mut slots = Vec::new();
+        let ordered_keys = order_slot_keys(query, cluster.slot_entries.keys());
+        for slot_key in ordered_keys {
+            let entries = match cluster.slot_entries.get(&slot_key) {
+                Some(entries) => entries,
+                None => continue,
+            };
+            let mut alternatives = build_slot_alternatives(entries);
+            if is_optional_slot(&slot_key, &optional_simple_sets)
+                && cluster
+                    .optional_slot_counts
+                    .get(&slot_key)
+                    .copied()
+                    .unwrap_or(0)
+                    < cluster.group_count
+                && slot_key.transaction_data_ids().is_empty()
+            {
+                let dcql_id = alternatives
+                    .first()
+                    .map(|selection| selection.dcql_id.clone())
+                    .unwrap_or_default();
+                alternatives.push(CredentialSelection {
+                    dcql_id,
+                    credential_id: None,
+                    selected_claims: Vec::new(),
+                });
+            }
+
+            slots.push(SetAlternative {
+                alternatives,
+                transaction_data_ids: slot_key.transaction_data_ids().to_vec(),
+            });
+        }
+        presentation_sets.push(slots);
+    }
+
+    DcqlOutput { presentation_sets }
+}
+
+fn analyze_simple_sets(query: &DcqlQuery) -> (BTreeMap<String, usize>, BTreeSet<usize>) {
+    let mut by_id = BTreeMap::new();
+    let mut optional = BTreeSet::new();
+
+    let Some(credential_sets) = &query.credential_sets else {
+        return (by_id, optional);
+    };
+
+    for (idx, set) in credential_sets.iter().enumerate() {
+        let non_empty_options = set.options.iter().filter(|opt| !opt.is_empty()).collect::<Vec<_>>();
+        if non_empty_options.is_empty() {
+            continue;
+        }
+        let simple = non_empty_options.iter().all(|opt| opt.len() == 1);
+        if !simple {
+            continue;
+        }
+        if !set.required {
+            optional.insert(idx);
+        }
+        for option in non_empty_options {
+            if let Some(id) = option.first() {
+                by_id.insert(id.clone(), idx);
+            }
+        }
+    }
+
+    (by_id, optional)
+}
+
+fn partition_slot_keys(
+    slot_keys: &[SlotKey],
+    optional_simple_sets: &BTreeSet<usize>,
+) -> (Vec<SlotKey>, BTreeMap<usize, SlotKey>) {
+    let mut required = Vec::new();
+    let mut optional = BTreeMap::new();
+    for key in slot_keys {
+        if is_optional_slot(key, optional_simple_sets) {
+            if let Some(set_index) = key.simple_set_index() {
+                optional.insert(set_index, key.clone());
+            }
+        } else {
+            required.push(key.clone());
+        }
+    }
+    (required, optional)
+}
+
+fn is_optional_slot(key: &SlotKey, optional_simple_sets: &BTreeSet<usize>) -> bool {
+    key.simple_set_index()
+        .is_some_and(|idx| optional_simple_sets.contains(&idx))
+}
+
+fn order_slot_keys<'a, I>(query: &DcqlQuery, keys: I) -> Vec<SlotKey>
+where
+    I: IntoIterator<Item = &'a SlotKey>,
+{
+    let credential_index = query
+        .credentials
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, cred)| cred.id().map(|id| (id.to_string(), idx)))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut ordered = keys.into_iter().cloned().collect::<Vec<_>>();
+    ordered.sort_by_key(|key| match key {
+        SlotKey::SimpleSet {
+            set_index,
+            transaction_data_ids,
+        } => (0u8, *set_index, transaction_data_ids.clone(), String::new()),
+        SlotKey::QueryId {
+            id,
+            transaction_data_ids,
+        } => (
+            1u8,
+            *credential_index.get(id).unwrap_or(&usize::MAX),
+            transaction_data_ids.clone(),
+            id.clone(),
+        ),
+    });
+    ordered
+}
+
+fn can_merge_optional_slots<C>(
+    cluster: &SlotCluster<C>,
+    optional_map: &BTreeMap<usize, SlotKey>,
+) -> bool {
+    for (set_index, slot_key) in optional_map {
+        if let Some(existing) = cluster.optional_slot_keys.get(set_index) {
+            if existing != slot_key {
+                return false;
+            }
+        } else if !slot_key.transaction_data_ids().is_empty() {
+            return false;
+        }
+    }
+    for (set_index, existing) in &cluster.optional_slot_keys {
+        if !optional_map.contains_key(set_index) && !existing.transaction_data_ids().is_empty() {
+            return false;
+        }
+    }
+    true
+}
+
+fn merge_group_into_cluster<C>(
+    cluster: &mut SlotCluster<C>,
+    group: &SlotGroup<C>,
+    optional_map: &BTreeMap<usize, SlotKey>,
+) where
+    C: Clone + Eq + std::hash::Hash,
+{
+    cluster.group_count += 1;
+    for (slot_key, entries) in &group.slot_entries {
+        cluster
+            .slot_entries
+            .entry(slot_key.clone())
+            .or_default()
+            .extend(entries.clone());
+    }
+
+    for (set_index, slot_key) in optional_map {
+        cluster
+            .optional_slot_keys
+            .entry(*set_index)
+            .or_insert(slot_key.clone());
+        let count = cluster.optional_slot_counts.entry(slot_key.clone()).or_insert(0);
+        *count += 1;
+    }
+}
+
+fn build_slot_alternatives<C>(entries: &[SlotEntry<C>]) -> Vec<CredentialSelection<C>>
+where
+    C: Clone + Eq + std::hash::Hash,
+{
+    let mut seen = FxHashSet::default();
+    let mut out = Vec::new();
+    for entry in entries {
+        let claims_key = claims_key(&entry.selected_claims);
+        for credential in &entry.credentials {
+            let key = (entry.dcql_id.clone(), claims_key.clone(), credential.clone());
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            out.push(CredentialSelection {
+                dcql_id: entry.dcql_id.clone(),
+                credential_id: Some(credential.clone()),
+                selected_claims: entry.selected_claims.clone(),
+            });
+        }
+    }
+
+    out
+}
+
+fn claims_key(claims: &[ClaimsQuery]) -> String {
+    serde_json::to_string(claims).unwrap_or_default()
 }
 
 fn match_query<S>(
@@ -633,6 +975,46 @@ fn expand_optional_prefer_absent(configs: Vec<Config>, options: Vec<Config>) -> 
     out
 }
 
+fn order_config_ids(query: &DcqlQuery, config: &Config) -> Vec<String> {
+    let mut ordered = Vec::new();
+    let mut seen = FxHashSet::default();
+
+    if let Some(credential_sets) = &query.credential_sets {
+        for set in credential_sets {
+            let Some(option) = set
+                .options
+                .iter()
+                .find(|option| option.iter().all(|id| config.contains(id)))
+            else {
+                continue;
+            };
+
+            for id in option {
+                if seen.insert(id.clone()) {
+                    ordered.push(id.clone());
+                }
+            }
+        }
+    }
+
+    for credential_query in &query.credentials {
+        let Some(id) = credential_query.id() else {
+            continue;
+        };
+        if config.contains(id) && seen.insert(id.to_string()) {
+            ordered.push(id.to_string());
+        }
+    }
+
+    for id in config {
+        if seen.insert(id.clone()) {
+            ordered.push(id.clone());
+        }
+    }
+
+    ordered
+}
+
 fn normalize_configs(configs: Vec<Config>) -> Vec<Config> {
     let mut seen = FxHashSet::default();
     let mut out = Vec::new();
@@ -642,18 +1024,6 @@ fn normalize_configs(configs: Vec<Config>) -> Vec<Config> {
         }
     }
     out
-}
-
-fn intersection(configs: &[Config]) -> BTreeSet<String> {
-    let mut iter = configs.iter();
-    let Some(first) = iter.next() else {
-        return BTreeSet::new();
-    };
-    let mut acc = first.clone();
-    for config in iter {
-        acc = acc.intersection(config).cloned().collect();
-    }
-    acc
 }
 
 #[derive(Debug, Clone)]

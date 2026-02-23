@@ -1,11 +1,12 @@
 use dcapi_dcql::{
-    ClaimValue, CredentialFormat, CredentialSetOptionMode, CredentialStore, DcqlQuery,
-    OptionalCredentialSetsMode, PlanError, PlanOptions, SelectionPlan, TransactionData,
-    TransactionDataType, TrustedAuthority, ValueMatch, plan_selection,
+    ClaimValue, CredentialFormat, CredentialSetOptionMode, CredentialStore, DcqlOutput, DcqlQuery,
+    OptionalCredentialSetsMode, PlanError, PlanOptions, TransactionData, TransactionDataType,
+    TrustedAuthority, ValueMatch, plan_selection,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use rustc_hash::FxHashMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -57,7 +58,7 @@ struct RequestFixture {
 
 #[derive(Debug, Clone)]
 struct JsonStore {
-    creds: HashMap<String, JsonCredential>,
+    creds: FxHashMap<String, JsonCredential>,
 }
 
 impl JsonStore {
@@ -194,18 +195,7 @@ impl CredentialStore for JsonStore {
 #[serde(tag = "result", rename_all = "lowercase")]
 enum Expected {
     Plan {
-        configs: Vec<Vec<String>>,
-
-        /// Optional explicit expectation. If omitted, we compute the true minimum
-        /// and assert the implementation matches it.
-        #[serde(default)]
-        min_outer_alternatives: Option<usize>,
-
-        query_matches: BTreeMap<String, QueryExpectation>,
-
-        /// Optional strict alternative-level expectations (per-assignment domains).
-        #[serde(default)]
-        alternatives: Vec<AlternativeExpectation>,
+        presentation_sets: Vec<Vec<SlotExpectation>>,
     },
     Error {
         error: String,
@@ -220,30 +210,19 @@ enum Expected {
 }
 
 #[derive(Debug, Deserialize)]
-struct QueryExpectation {
-    credentials: Vec<String>,
+struct SlotExpectation {
+    #[serde(default)]
+    transaction_data_ids: Vec<usize>,
+    alternatives: Vec<SelectionExpectation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SelectionExpectation {
+    dcql_id: String,
+    #[serde(default)]
+    credential_id: Option<String>,
     #[serde(default)]
     selected_claim_ids: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AlternativeExpectation {
-    entries: BTreeMap<String, AlternativeEntryExpectation>,
-    #[serde(default)]
-    transaction_data: Vec<TransactionAssignmentExpectation>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AlternativeEntryExpectation {
-    credentials: Vec<String>,
-    #[serde(default)]
-    transaction_data_indices: Vec<usize>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TransactionAssignmentExpectation {
-    index: usize,
-    credential_id: String,
 }
 
 // -----------------------------
@@ -434,6 +413,14 @@ case_test!(
     case_45_options_optional_multi_option_matrix,
     "45_options_optional_multi_option_matrix"
 );
+case_test!(
+    case_46_single_set_single_query_multiple_candidates,
+    "46_single_set_single_query_multiple_candidates"
+);
+case_test!(
+    case_47_single_set_two_options_multi_format,
+    "47_single_set_two_options_multi_format"
+);
 
 fn run_case(case_dir: &Path) {
     let request_path = case_dir.join("request.json");
@@ -580,10 +567,7 @@ fn assert_outcome_with_expected(
         (
             Ok(plan),
             Expected::Plan {
-                configs,
-                min_outer_alternatives,
-                query_matches,
-                alternatives,
+                presentation_sets,
             },
         ) => {
             assert_plan(
@@ -591,10 +575,7 @@ fn assert_outcome_with_expected(
                 &request.dcql_query,
                 request.transaction_data.as_deref(),
                 &plan,
-                &configs,
-                min_outer_alternatives,
-                &query_matches,
-                &alternatives,
+                &presentation_sets,
             );
         }
         (Err(err), Expected::Error { error, message }) => {
@@ -603,7 +584,7 @@ fn assert_outcome_with_expected(
         (Ok(plan), Expected::Error { error, .. }) => {
             panic!(
                 "{case_dir:?}: expected error {error:?} but got plan with {} outer alternatives",
-                plan.alternatives.len()
+                plan.presentation_sets.len()
             );
         }
         (Err(err), Expected::Plan { .. }) => {
@@ -652,122 +633,30 @@ fn assert_plan(
     case_dir: &Path,
     _request: &DcqlQuery,
     expected_transaction_data: Option<&[TransactionData]>,
-    plan: &SelectionPlan<String>,
-    expected_configs: &[Vec<String>],
-    _expected_min_outer: Option<usize>,
-    expected_query_matches: &BTreeMap<String, QueryExpectation>,
-    expected_alternatives: &[AlternativeExpectation],
+    plan: &DcqlOutput<String>,
+    expected_presentation_sets: &[Vec<SlotExpectation>],
 ) {
-    let expected_ordered = expected_configs
-        .iter()
-        .map(|cfg| {
-            let mut v = cfg.clone();
-            v.sort();
-            v
-        })
-        .collect::<Vec<_>>();
-
-    let mut seen = BTreeSet::new();
-    let mut actual_ordered = Vec::new();
-    for mut ids in plan.alternatives.iter().map(|alternative| {
-        let mut ids = alternative
-            .entries
-            .iter()
-            .map(|entry| entry.query.id.clone())
-            .collect::<Vec<_>>();
-        ids.sort();
-        ids
-    }) {
-        if seen.insert(ids.clone()) {
-            actual_ordered.push(std::mem::take(&mut ids));
-        }
-    }
-
-    assert_eq!(
-        actual_ordered, expected_ordered,
-        "{case_dir:?}: ordered plan configs do not match expected"
-    );
+    assert_presentation_sets(case_dir, plan, expected_presentation_sets);
 
     // Verify transaction-data bindings are coherent with entries and fully assigned.
     let expected_transaction_data_len = expected_transaction_data.map_or(0, |data| data.len());
-    for alternative in &plan.alternatives {
-        assert_eq!(
-            alternative.transaction_data.len(),
-            expected_transaction_data_len,
-            "{case_dir:?}: each alternative must assign all transaction_data entries"
-        );
-
-        let mut assigned_indices = BTreeSet::new();
-        let entry_by_id = alternative
-            .entries
-            .iter()
-            .map(|entry| (entry.query.id.clone(), entry))
-            .collect::<BTreeMap<_, _>>();
-        for assignment in &alternative.transaction_data {
-            assert!(
-                assignment.index < expected_transaction_data_len,
-                "{case_dir:?}: transaction_data assignment index {} out of bounds",
-                assignment.index
-            );
-            assert!(
-                assigned_indices.insert(assignment.index),
-                "{case_dir:?}: duplicate transaction_data assignment for index {}",
-                assignment.index
-            );
-
-            let Some(entry) = entry_by_id.get(&assignment.credential_id) else {
-                panic!(
-                    "{case_dir:?}: transaction_data assignment references missing credential id {:?}",
-                    assignment.credential_id
+    for set in &plan.presentation_sets {
+        let mut covered = BTreeSet::new();
+        for slot in set {
+            for index in &slot.transaction_data_ids {
+                assert!(
+                    *index < expected_transaction_data_len,
+                    "{case_dir:?}: transaction_data index {} out of bounds",
+                    index
                 );
-            };
-            assert!(
-                entry.transaction_data_indices.contains(&assignment.index),
-                "{case_dir:?}: entry {:?} missing transaction_data index {} association",
-                assignment.credential_id,
-                assignment.index
-            );
+                covered.insert(*index);
+            }
         }
-
         assert_eq!(
-            assigned_indices.len(),
+            covered.len(),
             expected_transaction_data_len,
-            "{case_dir:?}: missing transaction_data assignment in alternative"
+            "{case_dir:?}: each presentation set must cover all transaction_data entries"
         );
-    }
-
-    // Verify per-query candidates and selected claims against fixtures.
-    let actual_matches = extract_query_matches(plan);
-    for (qid, exp) in expected_query_matches {
-        let actual = actual_matches.get(qid).unwrap_or_else(|| {
-            panic!("{case_dir:?}: expected query_id {qid:?} to exist in plan output")
-        });
-
-        let mut got_creds = actual.credentials.clone();
-        got_creds.sort();
-        let mut exp_creds = exp.credentials.clone();
-        exp_creds.sort();
-        assert_eq!(
-            got_creds, exp_creds,
-            "{case_dir:?}: query {qid:?} credential candidates mismatch"
-        );
-
-        let mut got_claim_ids = actual
-            .selected_claims
-            .iter()
-            .filter_map(|c| c.id.clone())
-            .collect::<Vec<_>>();
-        got_claim_ids.sort();
-        let mut exp_claim_ids = exp.selected_claim_ids.clone();
-        exp_claim_ids.sort();
-        assert_eq!(
-            got_claim_ids, exp_claim_ids,
-            "{case_dir:?}: query {qid:?} selected claims mismatch"
-        );
-    }
-
-    if !expected_alternatives.is_empty() {
-        assert_alternatives(case_dir, plan, expected_alternatives);
     }
 }
 
@@ -779,144 +668,103 @@ fn claim_value_matches_json(expected: &ClaimValue, actual: &Value) -> bool {
     }
 }
 
-fn extract_query_matches(
-    plan: &SelectionPlan<String>,
-) -> BTreeMap<String, dcapi_dcql::QueryMatches<String>> {
-    let mut credentials_by_query = BTreeMap::<String, BTreeSet<String>>::new();
-    let mut claims_by_query = BTreeMap::<String, BTreeSet<String>>::new();
-    let mut first_query_shape = BTreeMap::<String, dcapi_dcql::QueryMatches<String>>::new();
-
-    for alternative in &plan.alternatives {
-        for entry in &alternative.entries {
-            let query_id = entry.query.id.clone();
-            credentials_by_query
-                .entry(query_id.clone())
-                .or_default()
-                .extend(entry.query.credentials.iter().cloned());
-            claims_by_query.entry(query_id.clone()).or_default().extend(
-                entry
-                    .query
-                    .selected_claims
-                    .iter()
-                    .filter_map(|claim| claim.id.clone()),
-            );
-            first_query_shape
-                .entry(query_id)
-                .or_insert_with(|| entry.query.clone());
-        }
-    }
-
-    let mut out = BTreeMap::new();
-    for (query_id, mut base) in first_query_shape {
-        base.credentials = credentials_by_query
-            .remove(&query_id)
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
-        base.selected_claims = claims_by_query
-            .remove(&query_id)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|id| dcapi_dcql::ClaimsQuery {
-                id: Some(id),
-                path: Vec::new(),
-                values: None,
-                intent_to_retain: None,
-            })
-            .collect();
-        out.insert(query_id, base);
-    }
-    out
-}
-
-fn assert_alternatives(
+fn assert_presentation_sets(
     case_dir: &Path,
-    plan: &SelectionPlan<String>,
-    expected_alternatives: &[AlternativeExpectation],
+    plan: &DcqlOutput<String>,
+    expected: &[Vec<SlotExpectation>],
 ) {
     let mut actual = plan
-        .alternatives
+        .presentation_sets
         .iter()
-        .map(canonicalize_actual_alternative)
+        .map(|set| canonicalize_actual_set(set))
         .collect::<Vec<_>>();
     actual.sort();
 
-    let mut expected = expected_alternatives
+    let mut expected = expected
         .iter()
-        .map(canonicalize_expected_alternative)
+        .map(|set| canonicalize_expected_set(set))
         .collect::<Vec<_>>();
     expected.sort();
 
     assert_eq!(
         actual, expected,
-        "{case_dir:?}: alternatives mismatch with expected per-assignment domains"
+        "{case_dir:?}: presentation_sets mismatch with expected"
     );
 }
 
-fn canonicalize_actual_alternative(
-    alternative: &dcapi_dcql::SelectionAlternative<String>,
-) -> String {
-    let mut entry_parts = alternative
-        .entries
+fn canonicalize_actual_set(set: &[dcapi_dcql::SetAlternative<String>]) -> String {
+    let mut slot_parts = set
         .iter()
-        .map(|entry| {
-            let mut credentials = entry.query.credentials.clone();
-            credentials.sort();
-            let mut transaction_data_indices = entry.transaction_data_indices.clone();
-            transaction_data_indices.sort();
-            format!(
-                "{}=>creds=[{}],tx=[{}]",
-                entry.query.id,
-                credentials.join(","),
-                join_indices(&transaction_data_indices)
-            )
-        })
+        .map(canonicalize_actual_slot)
         .collect::<Vec<_>>();
-    entry_parts.sort();
+    slot_parts.sort();
+    slot_parts.join("||")
+}
 
-    let mut assignments = alternative
-        .transaction_data
+fn canonicalize_expected_set(set: &[SlotExpectation]) -> String {
+    let mut slot_parts = set
         .iter()
-        .map(|assignment| format!("{}:{}", assignment.index, assignment.credential_id))
+        .map(canonicalize_expected_slot)
         .collect::<Vec<_>>();
-    assignments.sort();
+    slot_parts.sort();
+    slot_parts.join("||")
+}
 
+fn canonicalize_actual_slot(slot: &dcapi_dcql::SetAlternative<String>) -> String {
+    let mut transaction_data_ids = slot.transaction_data_ids.clone();
+    transaction_data_ids.sort();
+    let mut alt_parts = Vec::new();
+    for selection in &slot.alternatives {
+        if selection.credential_id.is_none() {
+            alt_parts.push("__none__".to_string());
+            continue;
+        }
+        let mut claim_ids = selection
+            .selected_claims
+            .iter()
+            .filter_map(|claim| claim.id.clone())
+            .collect::<Vec<_>>();
+        claim_ids.sort();
+        let cred_id = selection.credential_id.as_ref().unwrap();
+        alt_parts.push(format!(
+            "{}:{}:claims=[{}]",
+            selection.dcql_id,
+            cred_id,
+            claim_ids.join(",")
+        ));
+    }
+    alt_parts.sort();
     format!(
-        "td=[{}];entries=[{}]",
-        assignments.join("|"),
-        entry_parts.join("|")
+        "tx=[{}];alts=[{}]",
+        join_indices(&transaction_data_ids),
+        alt_parts.join("|")
     )
 }
 
-fn canonicalize_expected_alternative(alternative: &AlternativeExpectation) -> String {
-    let mut entry_parts = alternative
-        .entries
-        .iter()
-        .map(|(id, entry)| {
-            let mut credentials = entry.credentials.clone();
-            credentials.sort();
-            let mut transaction_data_indices = entry.transaction_data_indices.clone();
-            transaction_data_indices.sort();
-            format!(
-                "{id}=>creds=[{}],tx=[{}]",
-                credentials.join(","),
-                join_indices(&transaction_data_indices)
-            )
-        })
-        .collect::<Vec<_>>();
-    entry_parts.sort();
-
-    let mut assignments = alternative
-        .transaction_data
-        .iter()
-        .map(|assignment| format!("{}:{}", assignment.index, assignment.credential_id))
-        .collect::<Vec<_>>();
-    assignments.sort();
-
+fn canonicalize_expected_slot(slot: &SlotExpectation) -> String {
+    let mut transaction_data_ids = slot.transaction_data_ids.clone();
+    transaction_data_ids.sort();
+    let mut alt_parts = Vec::new();
+    for selection in &slot.alternatives {
+        if selection.credential_id.is_none() {
+            alt_parts.push("__none__".to_string());
+            continue;
+        }
+        let mut claim_ids = selection.selected_claim_ids.clone();
+        claim_ids.sort();
+        let cred_id = selection.credential_id.as_ref().unwrap();
+        alt_parts.push(format!(
+            "{}:{}:claims=[{}]",
+            selection.dcql_id,
+            cred_id,
+            claim_ids.join(",")
+        ));
+    }
+    alt_parts.sort();
     format!(
-        "td=[{}];entries=[{}]",
-        assignments.join("|"),
-        entry_parts.join("|")
+        "tx=[{}];alts=[{}]",
+        join_indices(&transaction_data_ids),
+        alt_parts.join("|")
     )
 }
 

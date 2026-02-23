@@ -1,5 +1,6 @@
 use crate::{CredmanApply, CredmanFieldContext, CredmanFieldSetContext};
 use core::ffi::CStr;
+use std::borrow::Cow;
 
 /// A key-value detail field displayed in an entry's detail section.
 ///
@@ -8,12 +9,22 @@ use core::ffi::CStr;
 /// - `display_value` must not be empty when provided
 #[derive(Debug, Clone)]
 pub struct Field<'a> {
-    pub display_name: &'a CStr,
-    pub display_value: Option<&'a CStr>,
+    pub display_name: Cow<'a, CStr>,
+    pub display_value: Option<Cow<'a, CStr>>,
 }
 
 impl<'a> Field<'a> {
     pub fn new(display_name: &'a CStr, display_value: Option<&'a CStr>) -> Self {
+        Self {
+            display_name: Cow::Borrowed(display_name),
+            display_value: display_value.map(Cow::Borrowed),
+        }
+    }
+
+    pub fn from_cow(
+        display_name: Cow<'a, CStr>,
+        display_value: Option<Cow<'a, CStr>>,
+    ) -> Self {
         Self {
             display_name,
             display_value,

@@ -22,7 +22,7 @@
 //!     let set =
 //!         CredentialSet::new(c"set:pid").add_entry(CredentialEntry::StringId(entry.clone()));
 //!     v2.add_entry_set(&set);
-//!     v2.add_entry_to_set(&entry, set.set_id, 0);
+//!     v2.add_entry_to_set(&entry, &set.set_id, 0);
 //! }
 //! ```
 

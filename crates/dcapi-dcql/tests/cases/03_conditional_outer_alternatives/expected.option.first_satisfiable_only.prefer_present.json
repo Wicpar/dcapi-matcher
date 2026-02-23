@@ -1,10 +1,27 @@
 {
   "result": "plan",
-  "configs": [
-    ["a", "b"]
-  ],
-  "query_matches": {
-    "a": { "credentials": ["sd_a"], "selected_claim_ids": [] },
-    "b": { "credentials": ["sd_b"], "selected_claim_ids": [] }
-  }
+  "presentation_sets": [
+    [
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "a",
+            "credential_id": "sd_a",
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "b",
+            "credential_id": "sd_b",
+            "selected_claim_ids": []
+          }
+        ]
+      }
+    ]
+  ]
 }

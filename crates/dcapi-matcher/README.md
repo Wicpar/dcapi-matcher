@@ -74,6 +74,7 @@ The matcher currently enforces and/or supports the following OpenID behavior:
       and additional info is derived from localized transaction fields (no hardcoded labels).
     - optional `MatcherStore::format_ts12_value` hook lets wallets localize value codes
       (for example, recurrence frequency identifiers) without hardcoded strings in the matcher.
+
 This split is intentional: `dcapi-matcher` provides deterministic matching and response shaping,
 while network retrieval and cryptographic verification for signed flows can be layered on top by the integrator.
 

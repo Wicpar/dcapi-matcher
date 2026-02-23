@@ -1,82 +1,137 @@
 {
   "result": "plan",
-  "configs": [
-    ["a", "b"]
-  ],
-  "query_matches": {
-    "a": {
-      "credentials": ["a_both", "a_t1", "a_none"],
-      "selected_claim_ids": []
-    },
-    "b": {
-      "credentials": ["b_both", "b_t2", "b_none"],
-      "selected_claim_ids": []
-    }
-  },
-  "alternatives": [
-    {
-      "transaction_data": [
-        { "index": 0, "credential_id": "a" },
-        { "index": 1, "credential_id": "a" }
-      ],
-      "entries": {
-        "a": {
-          "credentials": ["a_both"],
-          "transaction_data_indices": [0, 1]
-        },
-        "b": {
-          "credentials": ["b_both", "b_t2", "b_none"],
-          "transaction_data_indices": []
-        }
+  "presentation_sets": [
+    [
+      {
+        "transaction_data_ids": [
+          0,
+          1
+        ],
+        "alternatives": [
+          {
+            "dcql_id": "a",
+            "credential_id": "a_both",
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "b",
+            "credential_id": "b_t2",
+            "selected_claim_ids": []
+          },
+          {
+            "dcql_id": "b",
+            "credential_id": "b_none",
+            "selected_claim_ids": []
+          },
+          {
+            "dcql_id": "b",
+            "credential_id": "b_both",
+            "selected_claim_ids": []
+          }
+        ]
       }
-    },
-    {
-      "transaction_data": [
-        { "index": 0, "credential_id": "a" },
-        { "index": 1, "credential_id": "b" }
-      ],
-      "entries": {
-        "a": {
-          "credentials": ["a_both", "a_t1"],
-          "transaction_data_indices": [0]
-        },
-        "b": {
-          "credentials": ["b_both", "b_t2"],
-          "transaction_data_indices": [1]
-        }
+    ],
+    [
+      {
+        "transaction_data_ids": [
+          0
+        ],
+        "alternatives": [
+          {
+            "dcql_id": "a",
+            "credential_id": "a_t1",
+            "selected_claim_ids": []
+          },
+          {
+            "dcql_id": "a",
+            "credential_id": "a_both",
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [
+          1
+        ],
+        "alternatives": [
+          {
+            "dcql_id": "b",
+            "credential_id": "b_t2",
+            "selected_claim_ids": []
+          },
+          {
+            "dcql_id": "b",
+            "credential_id": "b_both",
+            "selected_claim_ids": []
+          }
+        ]
       }
-    },
-    {
-      "transaction_data": [
-        { "index": 0, "credential_id": "b" },
-        { "index": 1, "credential_id": "a" }
-      ],
-      "entries": {
-        "a": {
-          "credentials": ["a_both"],
-          "transaction_data_indices": [1]
-        },
-        "b": {
-          "credentials": ["b_both"],
-          "transaction_data_indices": [0]
-        }
+    ],
+    [
+      {
+        "transaction_data_ids": [
+          1
+        ],
+        "alternatives": [
+          {
+            "dcql_id": "a",
+            "credential_id": "a_both",
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [
+          0
+        ],
+        "alternatives": [
+          {
+            "dcql_id": "b",
+            "credential_id": "b_both",
+            "selected_claim_ids": []
+          }
+        ]
       }
-    },
-    {
-      "transaction_data": [
-        { "index": 0, "credential_id": "b" },
-        { "index": 1, "credential_id": "b" }
-      ],
-      "entries": {
-        "a": {
-          "credentials": ["a_both", "a_t1", "a_none"],
-          "transaction_data_indices": []
-        },
-        "b": {
-          "credentials": ["b_both"],
-          "transaction_data_indices": [0, 1]
-        }
+    ],
+    [
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "a",
+            "credential_id": "a_t1",
+            "selected_claim_ids": []
+          },
+          {
+            "dcql_id": "a",
+            "credential_id": "a_both",
+            "selected_claim_ids": []
+          },
+          {
+            "dcql_id": "a",
+            "credential_id": "a_none",
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [
+          0,
+          1
+        ],
+        "alternatives": [
+          {
+            "dcql_id": "b",
+            "credential_id": "b_both",
+            "selected_claim_ids": []
+          }
+        ]
       }
-    }
+    ]
   ]
 }

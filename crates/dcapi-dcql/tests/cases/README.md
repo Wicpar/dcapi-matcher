@@ -6,15 +6,13 @@ Each case is a folder with:
 
 - `request.json` – a request containing `DcqlQuery` fields plus optional `transaction_data`.
 - `credentials.json` – a minimal "credential package" consumed by the test-only JSON-backed `CredentialStore` implementation.
-- `expected.json` – the expected outcome expressed as **properties** (configs + per-query matches), with optional strict alternative-level checks when needed.
+- `expected.json` – the expected outcome expressed as **presentation_sets** only.
 - `expected.option.<credential_set_option_mode>.<optional_credential_sets_mode>.json` – optional full option matrix expectations. When one option file is present, all 6 combinations are required.
 
 The suite asserts the constraints you described:
 
-1. The planner output is an outer list of coherent inner alternatives.
-2. The alternatives cover **exactly** the feasible credential-set configurations (`configs`).
-3. Each alternative has explicit `transaction_data` bindings to credential ids.
-4. Per-credential query matching (VCT / doctype / holder-binding / trusted authorities / claims / claim_sets) matches expectations.
+1. The planner output is a list of presentation sets (slots + alternatives).
+2. Each presentation set covers all `transaction_data` indices.
 
 ## `credentials.json` schema (test-only)
 
@@ -51,30 +49,24 @@ Notes:
 ```jsonc
 {
   "result": "plan",
-  "min_outer_alternatives": 1, // optional metadata for fixture readers
-  "configs": [
-    ["a"],
-    ["a", "nice_to_have"],
-    []
-  ],
-  "query_matches": {
-    "a": {
-      "credentials": ["sd_a"],
-      "selected_claim_ids": ["name"]
-    }
-  },
-  "alternatives": [ // optional strict check, ignored when omitted
-    {
-      "transaction_data": [
-        { "index": 0, "credential_id": "a" }
-      ],
-      "entries": {
-        "a": {
-          "credentials": ["sd_a"],
-          "transaction_data_indices": [0]
-        }
+  "presentation_sets": [
+    [
+      {
+        "transaction_data_ids": [0],
+        "alternatives": [
+          {
+            "dcql_id": "a",
+            "credential_id": "sd_a",
+            "selected_claim_ids": ["name"]
+          },
+          {
+            "dcql_id": "a",
+            "credential_id": null,
+            "selected_claim_ids": []
+          }
+        ]
       }
-    }
+    ]
   ]
 }
 ```

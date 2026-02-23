@@ -17,21 +17,33 @@ use std::borrow::Cow;
 /// - `additional_info` is used only with the v3 set API (`AddPaymentEntryToSetV2`).
 #[derive(Debug, Clone)]
 pub struct PaymentEntry<'a> {
-    pub cred_id: &'a CStr,
-    pub merchant_name: &'a CStr,
-    pub transaction_amount: &'a CStr,
-    pub payment_method_name: Option<&'a CStr>,
-    pub payment_method_subtitle: Option<&'a CStr>,
+    pub cred_id: Cow<'a, CStr>,
+    pub merchant_name: Cow<'a, CStr>,
+    pub transaction_amount: Cow<'a, CStr>,
+    pub payment_method_name: Option<Cow<'a, CStr>>,
+    pub payment_method_subtitle: Option<Cow<'a, CStr>>,
     pub payment_method_icon: Option<Cow<'a, [u8]>>,
     pub bank_icon: Option<Cow<'a, [u8]>>,
     pub payment_provider_icon: Option<Cow<'a, [u8]>>,
-    pub metadata: Option<&'a CStr>,
-    pub additional_info: Option<&'a CStr>,
+    pub metadata: Option<Cow<'a, CStr>>,
+    pub additional_info: Option<Cow<'a, CStr>>,
     pub fields: Cow<'a, [Field<'a>]>,
 }
 
 impl<'a> PaymentEntry<'a> {
     pub fn new(cred_id: &'a CStr, merchant_name: &'a CStr, transaction_amount: &'a CStr) -> Self {
+        Self::new_cow(
+            Cow::Borrowed(cred_id),
+            Cow::Borrowed(merchant_name),
+            Cow::Borrowed(transaction_amount),
+        )
+    }
+
+    pub fn new_cow(
+        cred_id: Cow<'a, CStr>,
+        merchant_name: Cow<'a, CStr>,
+        transaction_amount: Cow<'a, CStr>,
+    ) -> Self {
         Self {
             cred_id,
             merchant_name,
@@ -62,7 +74,7 @@ impl<'a, 'b> CredmanApply<CredmanContext<'b>> for PaymentEntry<'a> {
             self,
             CredmanFieldContext {
                 host: ctx.host,
-                cred_id: self.cred_id,
+                cred_id: &self.cred_id,
             },
         );
     }
@@ -80,7 +92,7 @@ impl<'a, 'b> CredmanApply<CredmanSetContext<'b>> for PaymentEntry<'a> {
             self,
             CredmanFieldSetContext {
                 v2: ctx.v2,
-                cred_id: self.cred_id,
+                cred_id: &self.cred_id,
                 set_id: ctx.set_id,
                 set_index: ctx.set_index,
             },

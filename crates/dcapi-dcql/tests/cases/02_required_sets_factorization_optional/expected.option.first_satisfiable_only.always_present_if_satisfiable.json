@@ -1,10 +1,27 @@
 {
   "result": "plan",
-  "configs": [
-    ["nice_to_have", "pid"]
-  ],
-  "query_matches": {
-    "pid": { "credentials": ["sd_pid"], "selected_claim_ids": [] },
-    "nice_to_have": { "credentials": ["sd_nice"], "selected_claim_ids": [] }
-  }
+  "presentation_sets": [
+    [
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "nice_to_have",
+            "credential_id": "sd_nice",
+            "selected_claim_ids": []
+          }
+        ]
+      },
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "pid",
+            "credential_id": "sd_pid",
+            "selected_claim_ids": []
+          }
+        ]
+      }
+    ]
+  ]
 }

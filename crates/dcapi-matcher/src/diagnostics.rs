@@ -1,7 +1,7 @@
 extern crate alloc;
 
 use crate::error::format_error_chain;
-use alloc::boxed::Box;
+use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use android_credman::{
@@ -165,13 +165,16 @@ pub fn flush_and_apply() {
     let host = credman();
     let ctx = CredmanContext { host };
     let prefix = "dcapi:vp";
-    let set_id = leak_c8string(c8format!("{prefix}:logs"));
-    let set = CredentialSet::new(set_id).add_entries(entries.iter().map(|entry| {
+    let set_id = cow_cstr_from_c8string(c8format!("{prefix}:logs"));
+    let set = CredentialSet::new_cow(set_id).add_entries(entries.iter().map(|entry| {
         let id = next_id();
-        let cred_id = leak_c8string(c8format!("{prefix}:log:{id}"));
-        let mut cred = StringIdEntry::new(cred_id, entry.level.as_c8str().as_c_str());
+        let cred_id = cow_cstr_from_c8string(c8format!("{prefix}:log:{id}"));
+        let mut cred = StringIdEntry::new_cow(
+            cred_id,
+            Cow::Borrowed(entry.level.as_c8str().as_c_str()),
+        );
         if !entry.message.is_empty() {
-            cred.disclaimer = Some(cstr_from_bytes(entry.message.as_bytes()));
+            cred.disclaimer = Some(cow_cstr_from_bytes(entry.message.as_bytes()));
         }
         CredentialEntry::StringId(cred)
     }));
@@ -213,10 +216,10 @@ fn c8string_from_bytes(bytes: &[u8]) -> C8String {
     C8String::from_vec(bytes).unwrap_or_else(|_| C8String::new())
 }
 
-fn cstr_from_bytes(bytes: &[u8]) -> &'static CStr {
-    leak_c8string(c8string_from_bytes(bytes))
+fn cow_cstr_from_bytes<'a>(bytes: &[u8]) -> Cow<'a, CStr> {
+    cow_cstr_from_c8string(c8string_from_bytes(bytes))
 }
 
-fn leak_c8string(value: C8String) -> &'static CStr {
-    Box::leak(value.into_c_string().into_boxed_c_str())
+fn cow_cstr_from_c8string<'a>(value: C8String) -> Cow<'a, CStr> {
+    Cow::Owned(value.into_c_string())
 }

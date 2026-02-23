@@ -21,9 +21,9 @@ pub fn add_string_id_entry(entry: &StringIdEntry<'_>) {
     let p_cred_id = entry.cred_id.as_ptr();
     let (p_icon, len_icon) = to_bytes_ptr_len(entry.icon.as_deref());
     let p_title = entry.title.as_ptr();
-    let p_subtitle = opt_cstr_ptr(entry.subtitle);
-    let p_disclaimer = opt_cstr_ptr(entry.disclaimer);
-    let p_warning = opt_cstr_ptr(entry.warning);
+    let p_subtitle = opt_cstr_ptr(entry.subtitle.as_deref());
+    let p_disclaimer = opt_cstr_ptr(entry.disclaimer.as_deref());
+    let p_warning = opt_cstr_ptr(entry.warning.as_deref());
 
     unsafe {
         credman::AddStringIdEntry(
@@ -41,7 +41,7 @@ pub fn add_string_id_entry(entry: &StringIdEntry<'_>) {
 pub fn add_field_for_string_id_entry(cred_id: &CStr, field: &Field) {
     let p_cred_id = cred_id.as_ptr();
     let p_name = field.display_name.as_ptr();
-    let p_val = opt_cstr_ptr(field.display_value);
+    let p_val = opt_cstr_ptr(field.display_value.as_deref());
 
     unsafe {
         credman::AddFieldForStringIdEntry(p_cred_id, p_name, p_val);
@@ -51,8 +51,8 @@ pub fn add_field_for_string_id_entry(cred_id: &CStr, field: &Field) {
 pub fn add_payment_entry(entry: &PaymentEntry<'_>) {
     let p_cred_id = entry.cred_id.as_ptr();
     let p_merchant = entry.merchant_name.as_ptr();
-    let p_pm_name = opt_cstr_ptr(entry.payment_method_name);
-    let p_pm_sub = opt_cstr_ptr(entry.payment_method_subtitle);
+    let p_pm_name = opt_cstr_ptr(entry.payment_method_name.as_deref());
+    let p_pm_sub = opt_cstr_ptr(entry.payment_method_subtitle.as_deref());
     let (p_pm_icon, len_pm_icon) = to_bytes_ptr_len(entry.payment_method_icon.as_deref());
     let p_amount = entry.transaction_amount.as_ptr();
     let (p_bank_icon, len_bank_icon) = to_bytes_ptr_len(entry.bank_icon.as_deref());
@@ -79,7 +79,7 @@ pub fn add_inline_issuance_entry(entry: &InlineIssuanceEntry<'_>) {
     let p_cred_id = entry.cred_id.as_ptr();
     let (p_icon, len_icon) = to_bytes_ptr_len(entry.icon.as_deref());
     let p_title = entry.title.as_ptr();
-    let p_subtitle = opt_cstr_ptr(entry.subtitle);
+    let p_subtitle = opt_cstr_ptr(entry.subtitle.as_deref());
 
     unsafe {
         credman::AddInlineIssuanceEntry(p_cred_id, p_icon, len_icon, p_title, p_subtitle);
@@ -88,9 +88,9 @@ pub fn add_inline_issuance_entry(entry: &InlineIssuanceEntry<'_>) {
 
 pub fn set_additional_disclaimer_and_url(update: &VerificationEntryUpdate<'_>) {
     let p_cred_id = update.cred_id.as_ptr();
-    let p_disc = opt_cstr_ptr(update.secondary_disclaimer);
-    let p_url_txt = opt_cstr_ptr(update.url_display_text);
-    let p_url_val = opt_cstr_ptr(update.url_value);
+    let p_disc = opt_cstr_ptr(update.secondary_disclaimer.as_deref());
+    let p_url_txt = opt_cstr_ptr(update.url_display_text.as_deref());
+    let p_url_val = opt_cstr_ptr(update.url_value.as_deref());
 
     unsafe {
         credman::SetAdditionalDisclaimerAndUrlForVerificationEntry(
@@ -112,10 +112,10 @@ pub fn add_entry_to_set(entry: &StringIdEntry<'_>, set_id: &CStr, set_index: i32
     let p_cred_id = entry.cred_id.as_ptr();
     let (p_icon, len_icon) = to_bytes_ptr_len(entry.icon.as_deref());
     let p_title = entry.title.as_ptr();
-    let p_subtitle = opt_cstr_ptr(entry.subtitle);
-    let p_disclaimer = opt_cstr_ptr(entry.disclaimer);
-    let p_warning = opt_cstr_ptr(entry.warning);
-    let p_metadata = opt_cstr_ptr(entry.metadata);
+    let p_subtitle = opt_cstr_ptr(entry.subtitle.as_deref());
+    let p_disclaimer = opt_cstr_ptr(entry.disclaimer.as_deref());
+    let p_warning = opt_cstr_ptr(entry.warning.as_deref());
+    let p_metadata = opt_cstr_ptr(entry.metadata.as_deref());
     let p_set_id = set_id.as_ptr();
 
     unsafe {
@@ -137,7 +137,7 @@ pub fn add_entry_to_set(entry: &StringIdEntry<'_>, set_id: &CStr, set_index: i32
 pub fn add_field_to_entry_set(field: &Field, cred_id: &CStr, set_id: &CStr, set_index: i32) {
     let p_cred_id = cred_id.as_ptr();
     let p_name = field.display_name.as_ptr();
-    let p_val = opt_cstr_ptr(field.display_value);
+    let p_val = opt_cstr_ptr(field.display_value.as_deref());
     let p_set_id = set_id.as_ptr();
 
     unsafe {
@@ -148,13 +148,13 @@ pub fn add_field_to_entry_set(field: &Field, cred_id: &CStr, set_id: &CStr, set_
 pub fn add_payment_entry_to_set(entry: &PaymentEntry<'_>, set_id: &CStr, set_index: i32) {
     let p_cred_id = entry.cred_id.as_ptr();
     let p_merchant = entry.merchant_name.as_ptr();
-    let p_pm_name = opt_cstr_ptr(entry.payment_method_name);
-    let p_pm_sub = opt_cstr_ptr(entry.payment_method_subtitle);
+    let p_pm_name = opt_cstr_ptr(entry.payment_method_name.as_deref());
+    let p_pm_sub = opt_cstr_ptr(entry.payment_method_subtitle.as_deref());
     let (p_pm_icon, len_pm_icon) = to_bytes_ptr_len(entry.payment_method_icon.as_deref());
     let p_amount = entry.transaction_amount.as_ptr();
     let (p_bank_icon, len_bank_icon) = to_bytes_ptr_len(entry.bank_icon.as_deref());
     let (p_pp_icon, len_pp_icon) = to_bytes_ptr_len(entry.payment_provider_icon.as_deref());
-    let p_metadata = opt_cstr_ptr(entry.metadata);
+    let p_metadata = opt_cstr_ptr(entry.metadata.as_deref());
     let p_set_id = set_id.as_ptr();
 
     unsafe {
@@ -180,14 +180,14 @@ pub fn add_payment_entry_to_set(entry: &PaymentEntry<'_>, set_id: &CStr, set_ind
 pub fn add_payment_entry_to_set_v2(entry: &PaymentEntry<'_>, set_id: &CStr, set_index: i32) {
     let p_cred_id = entry.cred_id.as_ptr();
     let p_merchant = entry.merchant_name.as_ptr();
-    let p_pm_name = opt_cstr_ptr(entry.payment_method_name);
-    let p_pm_sub = opt_cstr_ptr(entry.payment_method_subtitle);
+    let p_pm_name = opt_cstr_ptr(entry.payment_method_name.as_deref());
+    let p_pm_sub = opt_cstr_ptr(entry.payment_method_subtitle.as_deref());
     let (p_pm_icon, len_pm_icon) = to_bytes_ptr_len(entry.payment_method_icon.as_deref());
     let p_amount = entry.transaction_amount.as_ptr();
     let (p_bank_icon, len_bank_icon) = to_bytes_ptr_len(entry.bank_icon.as_deref());
     let (p_pp_icon, len_pp_icon) = to_bytes_ptr_len(entry.payment_provider_icon.as_deref());
-    let p_additional_info = opt_cstr_ptr(entry.additional_info);
-    let p_metadata = opt_cstr_ptr(entry.metadata);
+    let p_additional_info = opt_cstr_ptr(entry.additional_info.as_deref());
+    let p_metadata = opt_cstr_ptr(entry.metadata.as_deref());
     let p_set_id = set_id.as_ptr();
 
     unsafe {

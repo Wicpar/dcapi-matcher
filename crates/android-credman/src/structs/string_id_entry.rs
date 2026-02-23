@@ -15,18 +15,22 @@ use std::borrow::Cow;
 /// - `metadata` is forwarded only when rendered inside a set (`credman_v2+`).
 #[derive(Debug, Clone)]
 pub struct StringIdEntry<'a> {
-    pub cred_id: &'a CStr,
-    pub title: &'a CStr,
+    pub cred_id: Cow<'a, CStr>,
+    pub title: Cow<'a, CStr>,
     pub icon: Option<Cow<'a, [u8]>>,
-    pub subtitle: Option<&'a CStr>,
-    pub disclaimer: Option<&'a CStr>,
-    pub warning: Option<&'a CStr>,
-    pub metadata: Option<&'a CStr>,
+    pub subtitle: Option<Cow<'a, CStr>>,
+    pub disclaimer: Option<Cow<'a, CStr>>,
+    pub warning: Option<Cow<'a, CStr>>,
+    pub metadata: Option<Cow<'a, CStr>>,
     pub fields: Cow<'a, [Field<'a>]>,
 }
 
 impl<'a> StringIdEntry<'a> {
     pub fn new(cred_id: &'a CStr, title: &'a CStr) -> Self {
+        Self::new_cow(Cow::Borrowed(cred_id), Cow::Borrowed(title))
+    }
+
+    pub fn new_cow(cred_id: Cow<'a, CStr>, title: Cow<'a, CStr>) -> Self {
         Self {
             cred_id,
             title,
@@ -47,7 +51,7 @@ impl<'a, 'b> CredmanApply<CredmanContext<'b>> for StringIdEntry<'a> {
             let field = Field::new(c"_", None);
             let field_ctx = CredmanFieldContext {
                 host: ctx.host,
-                cred_id: self.cred_id,
+                cred_id: &self.cred_id,
             };
             field.apply(field_ctx);
             return;
@@ -55,7 +59,7 @@ impl<'a, 'b> CredmanApply<CredmanContext<'b>> for StringIdEntry<'a> {
         for field in self.fields.iter() {
             let field_ctx = CredmanFieldContext {
                 host: ctx.host,
-                cred_id: self.cred_id,
+                cred_id: &self.cred_id,
             };
             field.apply(field_ctx);
         }
@@ -69,7 +73,7 @@ impl<'a, 'b> CredmanApply<CredmanSetContext<'b>> for StringIdEntry<'a> {
             let field = Field::new(c"_", Some(c"_"));
             let field_ctx = CredmanFieldSetContext {
                 v2: ctx.v2,
-                cred_id: self.cred_id,
+                cred_id: &self.cred_id,
                 set_id: ctx.set_id,
                 set_index: ctx.set_index,
             };
@@ -79,7 +83,7 @@ impl<'a, 'b> CredmanApply<CredmanSetContext<'b>> for StringIdEntry<'a> {
         for field in self.fields.iter() {
             let field_ctx = CredmanFieldSetContext {
                 v2: ctx.v2,
-                cred_id: self.cred_id,
+                cred_id: &self.cred_id,
                 set_id: ctx.set_id,
                 set_index: ctx.set_index,
             };

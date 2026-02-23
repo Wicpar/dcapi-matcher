@@ -1,12 +1,19 @@
 {
   "result": "plan",
-  "configs": [
-    ["pid"]
-  ],
-  "query_matches": {
-    "pid": {
-      "credentials": ["sd_fr"],
-      "selected_claim_ids": ["country"]
-    }
-  }
+  "presentation_sets": [
+    [
+      {
+        "transaction_data_ids": [],
+        "alternatives": [
+          {
+            "dcql_id": "pid",
+            "credential_id": "sd_fr",
+            "selected_claim_ids": [
+              "country"
+            ]
+          }
+        ]
+      }
+    ]
+  ]
 }

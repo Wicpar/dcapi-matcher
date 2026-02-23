@@ -13,12 +13,16 @@ use std::borrow::Cow;
 /// - On hosts without set support (v1), entries are emitted as standalone rows.
 #[derive(Debug, Clone)]
 pub struct CredentialSet<'a> {
-    pub set_id: &'a CStr,
+    pub set_id: Cow<'a, CStr>,
     pub slots: Cow<'a, [CredentialSlot<'a>]>,
 }
 
 impl<'a> CredentialSet<'a> {
     pub fn new(set_id: &'a CStr) -> Self {
+        Self::new_cow(Cow::Borrowed(set_id))
+    }
+
+    pub fn new_cow(set_id: Cow<'a, CStr>) -> Self {
         Self {
             set_id,
             slots: Cow::Borrowed(&[]),
@@ -61,7 +65,7 @@ impl<'a, 'b> CredmanApply<CredmanContext<'b>> for CredentialSet<'a> {
                 for entry in slot.alternatives.iter() {
                     let set_ctx = CredmanSetContext {
                         v2,
-                        set_id: self.set_id,
+                        set_id: &self.set_id,
                         set_index: i as i32,
                     };
                     CredmanApply::apply(entry, set_ctx);
