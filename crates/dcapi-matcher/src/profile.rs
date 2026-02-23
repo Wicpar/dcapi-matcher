@@ -1,4 +1,4 @@
-use crate::models::{OpenId4VciRequest, OpenId4VpRequest};
+use crate::models::OpenId4VpRequest;
 use core::convert::Infallible;
 use dcapi_dcql::{ClaimsQuery, CredentialQuery};
 use thiserror::Error;
@@ -14,11 +14,6 @@ pub trait Profile {
         request: OpenId4VpRequest,
     ) -> Result<OpenId4VpRequest, Self::Error>;
 
-    /// Validate and optionally transform an OpenID4VCI request.
-    fn apply_openid4vci(
-        &self,
-        request: OpenId4VciRequest,
-    ) -> Result<OpenId4VciRequest, Self::Error>;
 }
 
 /// Default profile: no validation beyond parsing.
@@ -36,12 +31,6 @@ impl Profile for DefaultProfile {
         Ok(request)
     }
 
-    fn apply_openid4vci(
-        &self,
-        request: OpenId4VciRequest,
-    ) -> Result<OpenId4VciRequest, Self::Error> {
-        Ok(request)
-    }
 }
 
 /// OpenID4VC HAIP profile checks.
@@ -109,12 +98,6 @@ impl Profile for HaipProfile {
         Ok(request)
     }
 
-    fn apply_openid4vci(
-        &self,
-        request: OpenId4VciRequest,
-    ) -> Result<OpenId4VciRequest, Self::Error> {
-        Ok(request)
-    }
 }
 
 fn claims_missing_intent_to_retain(claims: &[ClaimsQuery]) -> bool {

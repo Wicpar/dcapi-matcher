@@ -1,14 +1,13 @@
 use crate::diagnostics::ErrorExt;
 use crate::error::{MatcherError, Ts12Error, Ts12MetadataError};
+use crate::models::Ts12DataType;
 use crate::traits::{DcqlSelectionContext, MatcherStore};
 use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 use c8str::{C8Str, C8String};
-use dcapi_dcql::{
-    ClaimsPathPointer, PathElement, TransactionData, TransactionDataType, path_matches,
-};
+use dcapi_dcql::{ClaimsPathPointer, PathElement, TransactionData, path_matches};
 use serde_json::Value;
 
 /// Localized label entry for TS12 claim metadata.
@@ -47,13 +46,11 @@ pub type Ts12UiLabels<'a> = Vec<(String, Vec<Ts12LocalizedValue<'a>>)>;
 #[derive(Debug, Clone)]
 pub struct Ts12TransactionMetadata<'a> {
     /// Transaction data type and optional subtype this metadata applies to.
-    pub data_type: TransactionDataType,
+    pub data_type: Ts12DataType,
     /// Claim metadata entries for the transaction payload.
     pub claims: Vec<Ts12ClaimMetadata<'a>>,
     /// Localised UI labels for transaction confirmation UI elements.
     pub ui_labels: Ts12UiLabels<'a>,
-    /// JSON Schema object used to validate the transaction payload.
-    pub schema: Value,
 }
 
 /// Payment rendering summary for TS12 flows.
@@ -97,7 +94,7 @@ pub(crate) fn validate_ts12_transaction_data(
     index: usize,
     transaction_data: &TransactionData,
 ) -> Result<(), Ts12Error> {
-    let Some(payload) = transaction_data.payload.as_ref() else {
+    let Some(payload) = transaction_data_payload(transaction_data) else {
         return Ok(());
     };
 
@@ -106,6 +103,24 @@ pub(crate) fn validate_ts12_transaction_data(
     };
 
     Ok(())
+}
+
+fn transaction_data_payload(transaction_data: &TransactionData) -> Option<&Value> {
+    transaction_data.extra.get("payload")
+}
+
+fn transaction_data_subtype(transaction_data: &TransactionData) -> Option<&str> {
+    transaction_data
+        .extra
+        .get("subtype")
+        .and_then(Value::as_str)
+}
+
+fn ts12_data_type_from_transaction_data(transaction_data: &TransactionData) -> Ts12DataType {
+    Ts12DataType {
+        r#type: transaction_data.r#type.clone(),
+        subtype: transaction_data_subtype(transaction_data).map(|value| value.to_string()),
+    }
 }
 
 /// Builds TS12 display output for the provided selection context.
@@ -129,13 +144,13 @@ where
         let Some(td) = transaction_data.get(*idx) else {
             continue;
         };
-        let Some(payload) = td.payload.as_ref() else {
+        let Some(payload) = transaction_data_payload(td) else {
             continue;
         };
         let Some(metadata) = store.ts12_transaction_metadata(cred, td) else {
             let err = Ts12MetadataError::MissingMetadata {
                 credential_id: credential_id.as_str().to_string(),
-                data_type: td.data_type.clone(),
+                data_type: ts12_data_type_from_transaction_data(td),
             };
             err.warn();
             continue;
@@ -206,7 +221,7 @@ fn render_transaction_display<S>(
 where
     S: MatcherStore + ?Sized,
 {
-    let data_type = ctx.transaction_data.data_type.clone();
+    let data_type = ts12_data_type_from_transaction_data(ctx.transaction_data);
     if ctx.metadata.data_type != data_type {
         return Err(Ts12MetadataError::MetadataTypeMismatch {
             credential_id: ctx.credential_id.as_str().to_string(),
@@ -222,11 +237,7 @@ where
     let mut used_claims = Vec::new();
     for (path, value) in &collected {
         let Some(claim) = find_claim_metadata(&ctx.metadata.claims, path) else {
-            return Err(Ts12MetadataError::MissingClaimMetadata {
-                credential_id: ctx.credential_id.as_str().to_string(),
-                data_type: ctx.metadata.data_type.clone(),
-                path: path.clone(),
-            });
+            continue;
         };
         used_claims.push((path.clone(), value.clone(), claim));
     }
@@ -313,7 +324,7 @@ fn find_claim_metadata<'a>(
 
 fn select_locale(
     credential_id: &C8Str,
-    data_type: &TransactionDataType,
+    data_type: &Ts12DataType,
     locales: &[&str],
     used_claims: &[(ClaimsPathPointer, Value, &Ts12ClaimMetadata<'_>)],
     ui_labels: &Ts12UiLabels<'_>,
@@ -410,7 +421,7 @@ fn fallback_locales(labels: &[Ts12LocalizedValue<'_>]) -> Vec<String> {
 
 fn ui_labels_for_locale(
     credential_id: &C8Str,
-    data_type: &TransactionDataType,
+    data_type: &Ts12DataType,
     ui_labels: &Ts12UiLabels<'_>,
     locale: &str,
 ) -> Result<(), Ts12MetadataError> {

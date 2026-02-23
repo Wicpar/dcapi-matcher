@@ -67,7 +67,7 @@ pub struct IsoMdocMeta {
 /// instead of causing hard parse failures.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SdJwtMeta {
-    pub vct_values: Vec<String>,
+    pub vct_values: Option<Vec<String>>,
 }
 
 /// Format-agnostic Credential Query members.
@@ -246,26 +246,20 @@ pub struct TransactionDataType {
     /// Transaction data type identifier.
     #[serde(rename = "type")]
     pub r#type: String,
-    /// Optional type-specific subtype discriminator.
-    pub subtype: Option<String>,
 }
 
 /// Decoded transaction data object used for planning.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TransactionData {
-    /// Type and optional subtype discriminator.
-    #[serde(flatten)]
-    pub data_type: TransactionDataType,
+    /// Transaction data type identifier.
+    #[serde(rename = "type")]
+    pub r#type: String,
     /// Referenced credential query ids that can authorize this transaction.
     pub credential_ids: Vec<String>,
     /// Optional algorithm identifier from OpenID4VP transaction data.
     ///
     /// TS12 uses this value together with `transaction_data_hashes` in KB-JWT processing.
     pub transaction_data_hashes_alg: Option<String>,
-    /// Optional structured transaction payload.
-    ///
-    /// TS12 defines this as required for TS12 transaction-data types.
-    pub payload: Option<Value>,
     /// Unknown extension fields preserved for forward compatibility.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Value>,

@@ -3,7 +3,6 @@
 `dcapi-matcher` is a reusable matcher framework for:
 
 - OpenID4VP (`dcql_query`)
-- OpenID4VCI (`credential_offer`)
 - Android Credential Manager output building
 
 ## Purpose
@@ -68,9 +67,6 @@ The matcher currently enforces and/or supports the following OpenID behavior:
     - built-in validation for `urn:eudi:sca:payment:1` and `urn:eudi:sca:generic:1`.
     - TS12 display is driven by credential-provided transaction metadata
       (`MatcherStore::ts12_transaction_metadata`) with localized claim labels and UI labels.
-    - TS12 payloads are validated against the JSON Schema object provided in that metadata
-      (no built-in schemas are embedded in the matcher). External `$ref` references are forbidden;
-      only local fragment refs (starting with `#`) are accepted.
     - `MatcherStore::locales` must be provided for TS12; missing localized labels cause
       the matcher to return an error.
     - transaction fields are emitted as entry fields and appear before claim fields in string-id entries.
@@ -78,20 +74,6 @@ The matcher currently enforces and/or supports the following OpenID behavior:
       and additional info is derived from localized transaction fields (no hardcoded labels).
     - optional `MatcherStore::format_ts12_value` hook lets wallets localize value codes
       (for example, recurrence frequency identifiers) without hardcoded strings in the matcher.
-- OpenID4VCI:
-  - matching uses only the credential offer + optional issuer metadata; it does not consult the
-    credential store.
-  - `credential_offer` by value (direct object or wrapped form) is supported.
-  - `credential_offer_uri` is ignored when disabled; when enabled it returns an error because this
-    runtime does not perform network fetches.
-  - `credential_offer` and `credential_offer_uri` are treated as mutually exclusive.
-  - `credential_configuration_ids` must be non-empty, unique, and contain non-empty strings.
-  - slot ordering follows `credential_configuration_ids` order from the request.
-  - grant types are filtered using `OpenId4VciConfig` (authorization code, pre-authorized code,
-    and transaction code support).
-  - authorization code is only considered supported when either `authorization_details` or
-    `scope` support is enabled.
-
 This split is intentional: `dcapi-matcher` provides deterministic matching and response shaping,
 while network retrieval and cryptographic verification for signed flows can be layered on top by the integrator.
 

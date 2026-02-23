@@ -34,18 +34,16 @@ pub fn dcapi_matcher(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
         pub fn main() {
             ::dcapi_matcher::diagnostics::begin();
-            let mut reader = ::android_credman::CredentialReader::new();
-            let store = match <#arg_ty as ::dcapi_dcql::CredentialStore>::from_reader(&mut reader) {
-                Ok(store) => store,
+            match <#arg_ty as ::dcapi_dcql::CredentialStore>::from_reader(&mut ::android_credman::CredentialReader::new()) {
+                Ok(store) => {
+                    let _ = #fn_name(store);
+                },
                 Err(err) => {
                     ::dcapi_matcher::diagnostics::error(
                         ::std::format!("credential package read failed: {}", err),
                     );
-                    ::dcapi_matcher::diagnostics::flush_and_apply();
-                    return;
                 }
             };
-            #fn_name(store);
             ::dcapi_matcher::diagnostics::flush_and_apply();
         }
     };

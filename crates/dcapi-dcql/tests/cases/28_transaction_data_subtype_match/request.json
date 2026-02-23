@@ -7,6 +7,6 @@
     }
   ],
   "transaction_data": [
-    { "type": "t", "subtype": "s", "credential_ids": ["pid"] }
+    { "type": "t", "credential_ids": ["pid"] }
   ]
 }

@@ -1,7 +1,8 @@
 use crate::profile::ProfileError;
 use alloc::string::String;
 use core::error::Error as CoreError;
-use dcapi_dcql::{ClaimsPathPointer, TransactionDataType};
+use crate::models::Ts12DataType;
+use dcapi_dcql::ClaimsPathPointer;
 use thiserror::Error;
 
 /// TS12-specific request/configuration warnings.
@@ -26,7 +27,7 @@ pub enum Ts12MetadataError {
     #[error("credential {credential_id} ts12 metadata missing entry for {data_type:?}")]
     MissingMetadata {
         credential_id: String,
-        data_type: TransactionDataType,
+        data_type: Ts12DataType,
     },
     /// Transaction data metadata does not match the requested type/subtype.
     #[error(
@@ -34,39 +35,8 @@ pub enum Ts12MetadataError {
     )]
     MetadataTypeMismatch {
         credential_id: String,
-        expected: TransactionDataType,
-        actual: TransactionDataType,
-    },
-    /// Schema is not an object.
-    #[error("credential {credential_id} ts12 metadata for {data_type:?} schema must be an object")]
-    SchemaNotObject {
-        credential_id: String,
-        data_type: TransactionDataType,
-    },
-    /// Schema contains an external $ref.
-    #[error(
-        "credential {credential_id} ts12 metadata for {data_type:?} schema contains external $ref: {reference}"
-    )]
-    SchemaExternalRef {
-        credential_id: String,
-        data_type: TransactionDataType,
-        reference: String,
-    },
-    /// Schema compilation failed.
-    #[error("credential {credential_id} ts12 metadata for {data_type:?} invalid schema: {error:?}")]
-    SchemaInvalid {
-        credential_id: String,
-        data_type: TransactionDataType,
-        error: String,
-    },
-    /// Payload failed schema validation.
-    #[error(
-        "credential {credential_id} ts12 metadata for {data_type:?} payload does not match schema: {errors:?}"
-    )]
-    SchemaValidation {
-        credential_id: String,
-        data_type: TransactionDataType,
-        errors: Vec<String>,
+        expected: Ts12DataType,
+        actual: Ts12DataType,
     },
     /// Missing claim metadata for a payload path.
     #[error(
@@ -74,7 +44,7 @@ pub enum Ts12MetadataError {
     )]
     MissingClaimMetadata {
         credential_id: String,
-        data_type: TransactionDataType,
+        data_type: Ts12DataType,
         path: ClaimsPathPointer,
     },
     /// Missing localized label for a claim.
@@ -83,7 +53,7 @@ pub enum Ts12MetadataError {
     )]
     MissingClaimLabel {
         credential_id: String,
-        data_type: TransactionDataType,
+        data_type: Ts12DataType,
         locale: String,
         path: ClaimsPathPointer,
     },
@@ -93,7 +63,7 @@ pub enum Ts12MetadataError {
     )]
     EmptyClaimLabel {
         credential_id: String,
-        data_type: TransactionDataType,
+        data_type: Ts12DataType,
         locale: String,
         path: ClaimsPathPointer,
     },
@@ -101,7 +71,7 @@ pub enum Ts12MetadataError {
     #[error("credential {credential_id} ts12 metadata for {data_type:?} ui_labels missing {label}")]
     MissingUiLabels {
         credential_id: String,
-        data_type: TransactionDataType,
+        data_type: Ts12DataType,
         label: &'static str,
     },
     /// UI labels catalogue missing a localized value for a required key.
@@ -110,7 +80,7 @@ pub enum Ts12MetadataError {
     )]
     MissingLocalizedUiLabel {
         credential_id: String,
-        data_type: TransactionDataType,
+        data_type: Ts12DataType,
         label: &'static str,
         locale: String,
     },
@@ -120,7 +90,7 @@ pub enum Ts12MetadataError {
     )]
     MissingPreferredLocales {
         credential_id: String,
-        data_type: TransactionDataType,
+        data_type: Ts12DataType,
     },
 }
 
@@ -182,6 +152,21 @@ pub enum OpenId4VpError {
         #[source]
         source: serde_json::Error,
     },
+    /// Signed request is malformed.
+    #[error("signed openid4vp request is malformed for {protocol}")]
+    SignedRequestMalformed { protocol: String },
+    /// Signed request could not be verified.
+    #[error("signed openid4vp request could not be verified for {protocol}")]
+    SignedRequestUnverified { protocol: String },
+    /// Signed request missing expected_origins.
+    #[error("signed openid4vp request missing expected_origins for {protocol}")]
+    ExpectedOriginsMissing { protocol: String },
+    /// Signed request missing calling origin.
+    #[error("signed openid4vp request missing calling origin for {protocol}")]
+    OriginMissing { protocol: String },
+    /// Signed request origin mismatch.
+    #[error("signed openid4vp request origin mismatch for {protocol}: {origin}")]
+    OriginMismatch { protocol: String, origin: String },
     /// Request object handling is not supported.
     #[error("openid4vp request object is not supported for {protocol}")]
     RequestObjectUnsupported { protocol: String },
@@ -196,37 +181,6 @@ pub enum OpenId4VpError {
         index: usize,
         credential_ids: Vec<String>,
     },
-}
-
-/// OpenID4VCI request errors.
-#[derive(Debug, Error)]
-pub enum OpenId4VciError {
-    /// Request JSON is invalid.
-    #[error("openid4vci request is not valid json")]
-    Json {
-        #[source]
-        source: serde_json::Error,
-    },
-    /// Credential offer fields are mutually exclusive.
-    #[error("credential_offer and credential_offer_uri are mutually exclusive")]
-    CredentialOfferConflict,
-    /// Credential offer URI fetch is not supported.
-    #[error("credential_offer_uri fetching is not supported by matcher runtime")]
-    CredentialOfferUriUnsupported,
-    /// Credential configuration ids must be non-empty.
-    #[error("credential_configuration_ids must be non-empty")]
-    CredentialConfigurationIdsEmpty,
-    /// Credential configuration ids contains empty id.
-    #[error("credential_configuration_ids contains an empty id")]
-    CredentialConfigurationIdEmpty,
-    /// Credential configuration ids must be unique.
-    #[error("credential_configuration_ids must be unique")]
-    CredentialConfigurationIdsNotUnique,
-    /// OpenID4VCI request does not contain a credential offer.
-    #[error(
-        "request data must contain credential_offer/credential_offer_uri or be a credential_offer object"
-    )]
-    MissingCredentialOffer,
 }
 
 /// Credential package decoding errors.
@@ -259,9 +213,6 @@ pub enum MatcherError {
     /// OpenID4VP request structure is invalid.
     #[error("invalid openid4vp request")]
     InvalidOpenId4Vp(#[from] OpenId4VpError),
-    /// OpenID4VCI request structure is invalid.
-    #[error("invalid openid4vci request")]
-    InvalidOpenId4Vci(#[from] OpenId4VciError),
     /// Base64url decoding failed.
     #[error("invalid base64url data")]
     InvalidBase64(#[from] base64::DecodeError),

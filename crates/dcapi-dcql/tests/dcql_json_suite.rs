@@ -128,7 +128,7 @@ impl CredentialStore for JsonStore {
         self.get(cred)
             .transaction_data_types
             .iter()
-            .any(|t| t == &transaction_data.data_type)
+            .any(|t| t.r#type == transaction_data.r#type)
     }
 
     fn has_claim_path(

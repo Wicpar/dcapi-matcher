@@ -1,4 +1,9 @@
 {
-  "result": "parse_error",
-  "message": "missing field `vct_values`"
+  "result": "plan",
+  "configs": [
+    ["pid"]
+  ],
+  "query_matches": {
+    "pid": { "credentials": ["sd1"], "selected_claim_ids": [] }
+  }
 }

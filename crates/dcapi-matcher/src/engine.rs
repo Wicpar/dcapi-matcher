@@ -1,11 +1,13 @@
-use crate::config::{OpenId4VciConfig, OpenId4VpConfig};
-use crate::diagnostics::{self, DiagnosticContext, ErrorExt};
+use crate::config::OpenId4VpConfig;
+use crate::diagnostics::{self, ErrorExt};
 use crate::error::{
-    MatcherError, OpenId4VciError, OpenId4VpError, RequestDataError, TransactionDataDecodeError,
+    MatcherError, OpenId4VpError, RequestDataError, TransactionDataDecodeError,
 };
 use crate::models::{
-    CredentialOffer, DcApiRequest, OpenId4VciRequest, OpenId4VpRequest, PROTOCOL_OPENID4VCI,
-    PROTOCOL_OPENID4VP, PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
+    DcApiRequest, DcApiRequestItem, OpenId4VpMultiSignedData, OpenId4VpRequest,
+    OpenId4VpSignedData, OpenId4VpSignedEnvelope, OpenId4VpSignedFormat,
+    OpenId4VpSignedSignature, OpenId4VpUnsignedData, PROTOCOL_OPENID4VP,
+    PROTOCOL_OPENID4VP_V1_MULTISIGNED, PROTOCOL_OPENID4VP_V1_SIGNED,
     PROTOCOL_OPENID4VP_V1_UNSIGNED, RequestData, TransactionDataInput,
 };
 use crate::profile::{Profile, ProfileError};
@@ -15,13 +17,12 @@ use alloc::borrow::Cow;
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use android_credman::get_request_string;
+use android_credman::{get_calling_app_info, get_request_string};
 use android_credman::{
-    CredentialEntry, CredentialSet, CredentialSlot, Field, InlineIssuanceEntry, MatcherResponse,
-    PaymentEntry, StringIdEntry,
+    CredentialEntry, CredentialSet, CredentialSlot, Field, MatcherResponse, PaymentEntry,
+    StringIdEntry,
 };
 use base64::Engine;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use c8str::{C8Str, C8String, c8format};
 use core::ffi::CStr;
 use core::hash::Hash;
@@ -81,22 +82,19 @@ where
     P::Error: Into<ProfileError>,
 {
     let vp_config = store.openid4vp_config();
-    let vci_config = store.openid4vci_config();
     let mut response = MatcherResponse::new();
 
     for (request_index, item) in request.requests.iter().enumerate() {
-        match item.protocol.as_str() {
-            PROTOCOL_OPENID4VP
-            | PROTOCOL_OPENID4VP_V1_UNSIGNED
-            | PROTOCOL_OPENID4VP_V1_SIGNED
-            | PROTOCOL_OPENID4VP_V1_MULTISIGNED => {
+        match item {
+            DcApiRequestItem::OpenId4VpUnsigned { data } => {
                 if !vp_config.enabled {
                     continue;
                 }
+                let request = decode_openid4vp_unsigned_data(data)?;
                 let result = match_openid4vp_request(
                     request_index,
-                    item.protocol.as_str(),
-                    &item.data,
+                    PROTOCOL_OPENID4VP_V1_UNSIGNED,
+                    request,
                     store,
                     &vp_config,
                     options,
@@ -113,12 +111,25 @@ where
                     Err(err) => return Err(err),
                 }
             }
-            PROTOCOL_OPENID4VCI => {
-                if !vci_config.enabled {
+            DcApiRequestItem::OpenId4VpSigned { data } => {
+                if !vp_config.enabled || !vp_config.allow_signed_requests {
                     continue;
                 }
-                diagnostics::set_context(DiagnosticContext::Vci);
-                let result = match_openid4vci_request(&item.data, &vci_config, profile);
+                let envelope =
+                    decode_openid4vp_signed_envelope(PROTOCOL_OPENID4VP_V1_SIGNED, data)?;
+                ensure_signed_request_verified(store, PROTOCOL_OPENID4VP_V1_SIGNED, &envelope)?;
+                let request =
+                    decode_openid4vp_request_from_payload(PROTOCOL_OPENID4VP_V1_SIGNED, &envelope)?;
+                ensure_expected_origins(PROTOCOL_OPENID4VP_V1_SIGNED, &request)?;
+                let result = match_openid4vp_request(
+                    request_index,
+                    PROTOCOL_OPENID4VP_V1_SIGNED,
+                    request,
+                    store,
+                    &vp_config,
+                    options,
+                    profile,
+                );
                 match result {
                     Ok(result) => {
                         response = response.add_results(result.results.into_owned());
@@ -129,19 +140,229 @@ where
                     }
                     Err(err) => return Err(err),
                 }
-                diagnostics::set_context(DiagnosticContext::Vp);
             }
-            _ => {}
+            DcApiRequestItem::OpenId4VpMultiSigned { data } => {
+                if !vp_config.enabled || !vp_config.allow_signed_requests {
+                    continue;
+                }
+                let envelope =
+                    decode_openid4vp_multisigned_envelope(PROTOCOL_OPENID4VP_V1_MULTISIGNED, data)?;
+                ensure_signed_request_verified(
+                    store,
+                    PROTOCOL_OPENID4VP_V1_MULTISIGNED,
+                    &envelope,
+                )?;
+                let request = decode_openid4vp_request_from_payload(
+                    PROTOCOL_OPENID4VP_V1_MULTISIGNED,
+                    &envelope,
+                )?;
+                ensure_expected_origins(PROTOCOL_OPENID4VP_V1_MULTISIGNED, &request)?;
+                let result = match_openid4vp_request(
+                    request_index,
+                    PROTOCOL_OPENID4VP_V1_MULTISIGNED,
+                    request,
+                    store,
+                    &vp_config,
+                    options,
+                    profile,
+                );
+                match result {
+                    Ok(result) => {
+                        response = response.add_results(result.results.into_owned());
+                    }
+                    Err(MatcherError::Profile(err)) => {
+                        err.error();
+                        return Ok(MatcherResponse::new());
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+            DcApiRequestItem::Unknown => {}
         }
     }
 
     Ok(response)
 }
 
+fn decode_openid4vp_unsigned_data(
+    data: &OpenId4VpUnsignedData,
+) -> Result<OpenId4VpRequest, MatcherError> {
+    match data {
+        OpenId4VpUnsignedData::Params(request) => Ok(request.clone()),
+        OpenId4VpUnsignedData::JsonString(raw) => serde_json::from_str(raw).map_err(|err| {
+            MatcherError::InvalidOpenId4Vp(OpenId4VpError::Json { source: err })
+        }),
+    }
+}
+
+fn decode_openid4vp_signed_envelope(
+    protocol: &str,
+    data: &OpenId4VpSignedData,
+) -> Result<OpenId4VpSignedEnvelope, MatcherError> {
+    let mut parts = data.request.split('.');
+    let header_b64 = parts.next().unwrap_or_default();
+    let payload_b64 = parts.next().unwrap_or_default();
+    let signature_b64 = parts.next().unwrap_or_default();
+    if header_b64.is_empty() || payload_b64.is_empty() || signature_b64.is_empty() {
+        return Err(MatcherError::InvalidOpenId4Vp(
+            OpenId4VpError::SignedRequestMalformed {
+                protocol: protocol.to_string(),
+            },
+        ));
+    }
+    if parts.next().is_some() {
+        return Err(MatcherError::InvalidOpenId4Vp(
+            OpenId4VpError::SignedRequestMalformed {
+                protocol: protocol.to_string(),
+            },
+        ));
+    }
+    let protected = decode_base64url_json(protocol, header_b64)?;
+    let payload = decode_base64url_json(protocol, payload_b64)?;
+    Ok(OpenId4VpSignedEnvelope {
+        format: OpenId4VpSignedFormat::Compact,
+        payload_b64: payload_b64.to_string(),
+        payload,
+        signatures: vec![OpenId4VpSignedSignature {
+            protected_b64: header_b64.to_string(),
+            protected,
+            signature_b64: signature_b64.to_string(),
+            header: None,
+        }],
+    })
+}
+
+fn decode_openid4vp_multisigned_envelope(
+    protocol: &str,
+    data: &OpenId4VpMultiSignedData,
+) -> Result<OpenId4VpSignedEnvelope, MatcherError> {
+    if data.signatures.is_empty() {
+        return Err(MatcherError::InvalidOpenId4Vp(
+            OpenId4VpError::SignedRequestMalformed {
+                protocol: protocol.to_string(),
+            },
+        ));
+    }
+    let payload = decode_base64url_json(protocol, data.payload.as_str())?;
+    let mut signatures = Vec::with_capacity(data.signatures.len());
+    for signature in &data.signatures {
+        if signature.protected.is_empty() || signature.signature.is_empty() {
+            return Err(MatcherError::InvalidOpenId4Vp(
+                OpenId4VpError::SignedRequestMalformed {
+                    protocol: protocol.to_string(),
+                },
+            ));
+        }
+        let protected = decode_base64url_json(protocol, signature.protected.as_str())?;
+        signatures.push(OpenId4VpSignedSignature {
+            protected_b64: signature.protected.clone(),
+            protected,
+            signature_b64: signature.signature.clone(),
+            header: signature.header.clone(),
+        });
+    }
+    Ok(OpenId4VpSignedEnvelope {
+        format: OpenId4VpSignedFormat::Json,
+        payload_b64: data.payload.clone(),
+        payload,
+        signatures,
+    })
+}
+
+fn decode_openid4vp_request_from_payload(
+    protocol: &str,
+    envelope: &OpenId4VpSignedEnvelope,
+) -> Result<OpenId4VpRequest, MatcherError> {
+    serde_json::from_value(envelope.payload.clone()).map_err(|err| {
+        MatcherError::InvalidOpenId4Vp(OpenId4VpError::SignedPayloadNotSupported {
+            protocol: protocol.to_string(),
+            source: err,
+        })
+    })
+}
+
+fn ensure_signed_request_verified<S: MatcherStore>(
+    store: &S,
+    protocol: &str,
+    envelope: &OpenId4VpSignedEnvelope,
+) -> Result<(), MatcherError>
+{
+    if !store.verify_openid4vp_signed_request(protocol, envelope) {
+        return Err(MatcherError::InvalidOpenId4Vp(
+            OpenId4VpError::SignedRequestUnverified {
+                protocol: protocol.to_string(),
+            },
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_expected_origins(
+    protocol: &str,
+    request: &OpenId4VpRequest,
+) -> Result<(), MatcherError> {
+    let expected = expected_origins_from_request(request).ok_or_else(|| {
+        MatcherError::InvalidOpenId4Vp(OpenId4VpError::ExpectedOriginsMissing {
+            protocol: protocol.to_string(),
+        })
+    })?;
+    let origin = calling_origin().ok_or_else(|| {
+        MatcherError::InvalidOpenId4Vp(OpenId4VpError::OriginMissing {
+            protocol: protocol.to_string(),
+        })
+    })?;
+    if expected.iter().any(|value| value == &origin) {
+        return Ok(());
+    }
+    Err(MatcherError::InvalidOpenId4Vp(
+        OpenId4VpError::OriginMismatch {
+            protocol: protocol.to_string(),
+            origin,
+        },
+    ))
+}
+
+fn expected_origins_from_request(request: &OpenId4VpRequest) -> Option<Vec<String>> {
+    let value = request.extra.get("expected_origins")?;
+    let origins = value.as_array()?;
+    if origins.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(origins.len());
+    for entry in origins {
+        let entry = entry.as_str()?;
+        if entry.is_empty() {
+            return None;
+        }
+        out.push(entry.to_string());
+    }
+    Some(out)
+}
+
+fn calling_origin() -> Option<String> {
+    let app_info = get_calling_app_info();
+    let origin = app_info.origin();
+    if origin.is_empty() {
+        None
+    } else {
+        Some(origin.to_string())
+    }
+}
+
+fn decode_base64url_json(protocol: &str, input: &str) -> Result<Value, MatcherError> {
+    let decoded = decode_base64url(input).map_err(MatcherError::InvalidBase64)?;
+    serde_json::from_slice(&decoded).map_err(|err| {
+        MatcherError::InvalidOpenId4Vp(OpenId4VpError::SignedPayloadNotSupported {
+            protocol: protocol.to_string(),
+            source: err,
+        })
+    })
+}
+
 fn match_openid4vp_request<'s, S, P>(
     request_index: usize,
     protocol: &str,
-    data: &RequestData,
+    mut request: OpenId4VpRequest,
     store: &'s S,
     config: &OpenId4VpConfig,
     options: &MatcherOptions,
@@ -153,45 +374,7 @@ where
     P: Profile,
     P::Error: Into<ProfileError>,
 {
-    let is_signed_protocol = matches!(
-        protocol,
-        PROTOCOL_OPENID4VP_V1_SIGNED | PROTOCOL_OPENID4VP_V1_MULTISIGNED
-    );
-    if !config.allow_signed_requests
-        && (protocol == PROTOCOL_OPENID4VP_V1_SIGNED
-            || protocol == PROTOCOL_OPENID4VP_V1_MULTISIGNED)
-    {
-        return Ok(MatcherResponse::new());
-    }
-
-    let mut value = data
-        .to_value()
-        .map_err(|err| MatcherError::InvalidRequestData(RequestDataError::Json { source: err }))?;
-    let request_override = value
-        .as_object()
-        .and_then(|obj| obj.get("request"))
-        .cloned();
-    if request_override.is_some() && !config.allow_signed_requests {
-        return Ok(MatcherResponse::new());
-    }
-    if let Some(request_value) = request_override {
-        value = decode_openid4vp_request_object(protocol, is_signed_protocol, request_value)?;
-    } else if is_signed_protocol && let Value::String(raw) = &value {
-        value = decode_openid4vp_signed_payload(protocol, raw)?;
-    }
-    let scope_present = value.as_object().and_then(|obj| obj.get("scope")).is_some();
-
-    let mut request: OpenId4VpRequest = serde_json::from_value(value.clone()).map_err(|err| {
-        if protocol == PROTOCOL_OPENID4VP_V1_SIGNED || protocol == PROTOCOL_OPENID4VP_V1_MULTISIGNED
-        {
-            MatcherError::InvalidOpenId4Vp(OpenId4VpError::SignedPayloadNotSupported {
-                protocol: protocol.to_string(),
-                source: err,
-            })
-        } else {
-            MatcherError::InvalidOpenId4Vp(OpenId4VpError::Json { source: err })
-        }
-    })?;
+    let scope_present = request.extra.get("scope").is_some();
     request = apply_openid4vp_profile(profile, protocol, request)?;
 
     let mut response = MatcherResponse::new();
@@ -259,20 +442,6 @@ where
     Ok(response)
 }
 
-fn decode_openid4vp_request_object(
-    protocol: &str,
-    is_signed_protocol: bool,
-    request_value: Value,
-) -> Result<Value, MatcherError> {
-    match request_value {
-        Value::String(raw) if is_signed_protocol => decode_openid4vp_signed_payload(protocol, &raw),
-        Value::String(raw) => serde_json::from_str(&raw)
-            .map_err(|err| MatcherError::InvalidOpenId4Vp(OpenId4VpError::Json { source: err })),
-        Value::Object(obj) => Ok(Value::Object(obj)),
-        other => Ok(other),
-    }
-}
-
 fn apply_openid4vp_profile<P>(
     profile: &P,
     protocol: &str,
@@ -285,246 +454,6 @@ where
     profile
         .apply_openid4vp(protocol, request)
         .map_err(|err| MatcherError::Profile(err.into()))
-}
-
-fn apply_openid4vci_profile<P>(
-    profile: &P,
-    request: OpenId4VciRequest,
-) -> Result<OpenId4VciRequest, MatcherError>
-where
-    P: Profile,
-    P::Error: Into<ProfileError>,
-{
-    profile
-        .apply_openid4vci(request)
-        .map_err(|err| MatcherError::Profile(err.into()))
-}
-
-fn decode_openid4vp_signed_payload(protocol: &str, jwt: &str) -> Result<Value, MatcherError> {
-    let mut parts = jwt.split('.');
-    let _ = parts.next();
-    let payload = parts.next().unwrap_or_default();
-    let decoded = URL_SAFE_NO_PAD
-        .decode(payload.as_bytes())
-        .map_err(MatcherError::InvalidBase64)?;
-    serde_json::from_slice(&decoded).map_err(|err| {
-        MatcherError::InvalidOpenId4Vp(OpenId4VpError::SignedPayloadNotSupported {
-            protocol: protocol.to_string(),
-            source: err,
-        })
-    })
-}
-
-fn match_openid4vci_request<'s, P>(
-    data: &RequestData,
-    config: &OpenId4VciConfig,
-    profile: &P,
-) -> Result<MatcherResponse<'s>, MatcherError>
-where
-    P: Profile,
-    P::Error: Into<ProfileError>,
-{
-    if !config.allow_credential_offer {
-        return Ok(MatcherResponse::new());
-    }
-    let value = data
-        .to_value()
-        .map_err(|err| MatcherError::InvalidRequestData(RequestDataError::Json { source: err }))?;
-    let request = decode_openid4vci_request(&value)?;
-    let request = apply_openid4vci_profile(profile, request)?;
-    if request.credential_offer.is_some() && request.credential_offer_uri.is_some() {
-        return Err(MatcherError::InvalidOpenId4Vci(
-            OpenId4VciError::CredentialOfferConflict,
-        ));
-    }
-    let Some(credential_offer) = request.credential_offer() else {
-        if request.credential_offer_uri.is_some() {
-            if !config.allow_credential_offer_uri {
-                return Ok(MatcherResponse::new());
-            }
-            return Err(MatcherError::InvalidOpenId4Vci(
-                OpenId4VciError::CredentialOfferUriUnsupported,
-            ));
-        }
-        return Ok(MatcherResponse::new());
-    };
-    validate_credential_offer(credential_offer)?;
-    if !credential_offer_has_supported_grant(credential_offer, config) {
-        return Ok(MatcherResponse::new());
-    }
-
-    let response = MatcherResponse::new().add_inline_issuances(
-        credential_offer
-            .credential_configuration_ids
-            .iter()
-            .map(|configuration_id| {
-                let configuration = request.credential_configuration(configuration_id);
-                build_vci_entry(credential_offer, configuration_id.as_str(), configuration)
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-    );
-
-    if response.results.is_empty() {
-        return Ok(MatcherResponse::new());
-    }
-
-    Ok(response)
-}
-
-fn validate_credential_offer(credential_offer: &CredentialOffer) -> Result<(), MatcherError> {
-    // OpenID4VCI defines credential_configuration_ids as a non-empty array of unique strings.
-    if credential_offer.credential_configuration_ids.is_empty() {
-        return Err(MatcherError::InvalidOpenId4Vci(
-            OpenId4VciError::CredentialConfigurationIdsEmpty,
-        ));
-    }
-
-    let mut seen: Vec<&str> = Vec::new();
-    for id in &credential_offer.credential_configuration_ids {
-        if id.is_empty() {
-            return Err(MatcherError::InvalidOpenId4Vci(
-                OpenId4VciError::CredentialConfigurationIdEmpty,
-            ));
-        }
-        if seen.contains(&id.as_str()) {
-            return Err(MatcherError::InvalidOpenId4Vci(
-                OpenId4VciError::CredentialConfigurationIdsNotUnique,
-            ));
-        }
-        seen.push(id.as_str());
-    }
-    Ok(())
-}
-
-fn credential_offer_has_supported_grant(
-    credential_offer: &CredentialOffer,
-    config: &OpenId4VciConfig,
-) -> bool {
-    let allow_authorization_code = config.allow_authorization_code
-        && (config.allow_authorization_details || config.allow_scope);
-    let allow_pre_authorized_code = config.allow_pre_authorized_code;
-
-    if credential_offer.grants.is_empty() {
-        return allow_authorization_code || allow_pre_authorized_code;
-    }
-
-    for (grant_type, grant_config) in &credential_offer.grants {
-        match grant_type.as_str() {
-            "authorization_code" => {
-                if allow_authorization_code {
-                    return true;
-                }
-            }
-            "urn:ietf:params:oauth:grant-type:pre-authorized_code" => {
-                if !allow_pre_authorized_code {
-                    continue;
-                }
-                if grant_requires_tx_code(grant_config) && !config.allow_tx_code {
-                    continue;
-                }
-                return true;
-            }
-            _ => {}
-        }
-    }
-
-    false
-}
-
-fn grant_requires_tx_code(grant_config: &Value) -> bool {
-    let Some(obj) = grant_config.as_object() else {
-        return false;
-    };
-    obj.contains_key("tx_code")
-}
-
-fn build_vci_entry<'s>(
-    credential_offer: &CredentialOffer,
-    configuration_id: &str,
-    configuration: Option<&Value>,
-) -> Result<InlineIssuanceEntry<'s>, MatcherError> {
-    let (title, subtitle, icon) = vci_display_from_configuration(configuration);
-    let cred_id = cstr_from_bytes(configuration_id.as_bytes());
-    let title = cstr_from_bytes(title.unwrap_or(configuration_id).as_bytes());
-    let mut entry = InlineIssuanceEntry::new(cred_id, title);
-    entry.subtitle = subtitle
-        .map(|value| cstr_from_bytes(value.as_bytes()))
-        .or_else(|| {
-            if credential_offer.credential_issuer.is_empty() {
-                None
-            } else {
-                Some(cstr_from_bytes(
-                    credential_offer.credential_issuer.as_bytes(),
-                ))
-            }
-        });
-    if let Some(icon) = icon {
-        entry.icon = Some(Cow::Owned(icon));
-    }
-
-    Ok(entry)
-}
-
-fn vci_display_from_configuration(
-    configuration: Option<&Value>,
-) -> (Option<&str>, Option<&str>, Option<Vec<u8>>) {
-    let Some(configuration) = configuration else {
-        return (None, None, None);
-    };
-    let display = configuration
-        .get("credential_metadata")
-        .and_then(|metadata| metadata.get("display"))
-        .and_then(Value::as_array)
-        .or_else(|| configuration.get("display").and_then(Value::as_array));
-    let Some(entry) = display.and_then(|entries| entries.first()) else {
-        return (None, None, None);
-    };
-    let Some(obj) = entry.as_object() else {
-        return (None, None, None);
-    };
-    let title = obj.get("name").and_then(Value::as_str);
-    let subtitle = obj.get("description").and_then(Value::as_str);
-    let icon = vci_display_icon_bytes(obj);
-    (title, subtitle, icon)
-}
-
-fn vci_display_icon_bytes(entry: &serde_json::Map<String, Value>) -> Option<Vec<u8>> {
-    let logo_uri = match entry.get("logo") {
-        Some(Value::String(value)) => Some(value.as_str()),
-        Some(Value::Object(obj)) => obj
-            .get("uri")
-            .and_then(Value::as_str)
-            .or_else(|| obj.get("url").and_then(Value::as_str)),
-        _ => None,
-    }
-    .or_else(|| entry.get("logo_uri").and_then(Value::as_str))
-    .or_else(|| entry.get("icon").and_then(Value::as_str))
-    .or_else(|| entry.get("image").and_then(Value::as_str));
-
-    logo_uri.and_then(decode_data_url)
-}
-
-fn decode_data_url(uri: &str) -> Option<Vec<u8>> {
-    let uri = uri.trim();
-    let rest = uri.strip_prefix("data:")?;
-    let (meta, data) = rest.split_once(',')?;
-    if !meta.contains(";base64") {
-        return None;
-    }
-    if data.is_empty() {
-        return None;
-    }
-    if let Ok(bytes) = STANDARD.decode(data.as_bytes())
-        && !bytes.is_empty()
-    {
-        return Some(bytes);
-    }
-    if let Ok(bytes) = URL_SAFE_NO_PAD.decode(data.as_bytes())
-        && !bytes.is_empty()
-    {
-        return Some(bytes);
-    }
-    None
 }
 
 fn set_from_dcql_alternative<'s, 't, S>(
@@ -556,7 +485,7 @@ where
             .query
             .credentials
             .iter()
-            .filter(|cred| store.supports_protocol(cred, protocol))
+            .filter(|cred| supports_protocol(store, cred, protocol))
             .filter_map(|cred| match build_entry(store, cred, &context, options) {
                 Ok(entry) => Some(entry),
                 Err(err) => {
@@ -573,6 +502,23 @@ where
     }
 
     Ok(set)
+}
+
+fn supports_protocol<S: MatcherStore>(
+    store: &S,
+    cred: &S::CredentialRef,
+    protocol: &str,
+) -> bool {
+    if store.supports_protocol(cred, protocol) {
+        return true;
+    }
+    if protocol == PROTOCOL_OPENID4VP_V1_UNSIGNED {
+        return store.supports_protocol(cred, PROTOCOL_OPENID4VP);
+    }
+    if protocol == PROTOCOL_OPENID4VP {
+        return store.supports_protocol(cred, PROTOCOL_OPENID4VP_V1_UNSIGNED);
+    }
+    false
 }
 
 fn build_entry<'s, 'c, S>(
@@ -744,7 +690,7 @@ fn decode_transaction_data(
             }
         };
 
-        if parsed.data_type.r#type.is_empty() {
+        if parsed.r#type.is_empty() {
             let warn = TransactionDataDecodeError::MissingType { index };
             warn.warn();
             continue;
@@ -835,24 +781,6 @@ fn pad_base64url(input: &str) -> String {
     out
 }
 
-fn decode_openid4vci_request(value: &Value) -> Result<OpenId4VciRequest, MatcherError> {
-    if let Ok(request) = serde_json::from_value::<OpenId4VciRequest>(value.clone())
-        && (request.credential_offer.is_some() || request.credential_offer_uri.is_some())
-    {
-        return Ok(request);
-    }
-
-    if let Ok(offer) = serde_json::from_value::<CredentialOffer>(value.clone()) {
-        return Ok(OpenId4VciRequest {
-            credential_offer: Some(offer),
-            ..OpenId4VciRequest::default()
-        });
-    }
-
-    Err(MatcherError::InvalidOpenId4Vci(
-        OpenId4VciError::MissingCredentialOffer,
-    ))
-}
 
 /// Parses JSON from `RequestData` and deserializes into a target type.
 pub fn decode_request_data<T: DeserializeOwned>(data: &RequestData) -> Result<T, MatcherError> {

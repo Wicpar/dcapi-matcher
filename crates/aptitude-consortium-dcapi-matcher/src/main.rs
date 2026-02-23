@@ -1,4 +1,4 @@
-use android_credman::CredmanRender;
+use android_credman::{get_request_string, CredmanRender};
 use base64::Engine;
 use c8str::{C8Str, C8String, c8, c8format};
 use dcapi_dcql::{
@@ -6,13 +6,14 @@ use dcapi_dcql::{
     TransactionData, TransactionDataType, ValueMatch, path_matches,
 };
 use dcapi_matcher::{
-    DefaultProfile, LogLevel, MatcherOptions, MatcherStore, OpenId4VciConfig, OpenId4VpConfig,
-    Ts12ClaimMetadata, Ts12LocalizedLabel, Ts12LocalizedValue, Ts12TransactionMetadata,
-    Ts12UiLabels, dcapi_matcher, match_dc_api_request,
+    DefaultProfile, LogLevel, MatcherOptions, MatcherStore, OpenId4VpConfig, Ts12ClaimMetadata,
+    Ts12DataType, Ts12LocalizedLabel, Ts12LocalizedValue, Ts12PaymentSummary,
+    Ts12TransactionMetadata, Ts12UiLabels, dcapi_matcher, match_dc_api_request,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::borrow::Cow;
+use dcapi_matcher::diagnostics::info;
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
@@ -50,8 +51,6 @@ struct PackageConfig {
     #[serde(default)]
     openid4vp: OpenId4VpConfig,
     #[serde(default)]
-    openid4vci: OpenId4VciConfig,
-    #[serde(default)]
     dcql: PlanOptions,
     log_level: Option<LogLevel>,
     #[serde(default)]
@@ -80,7 +79,6 @@ struct CredentialConfig {
     doctype: Option<String>,
     holder_binding: Option<bool>,
     claims: Option<Value>,
-    protocols: Option<Vec<String>>,
     #[serde(default)]
     transaction_data_types: Vec<Ts12MetadataConfig>,
 }
@@ -96,12 +94,11 @@ struct CredentialFieldConfig {
 #[derive(Debug, Deserialize)]
 struct Ts12MetadataConfig {
     #[serde(flatten)]
-    data_type: TransactionDataType,
+    data_type: Ts12DataType,
     #[serde(default)]
     claims: Vec<Ts12ClaimConfig>,
     #[serde(default)]
     ui_labels: Vec<Ts12UiLabelConfig>,
-    schema: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,7 +151,6 @@ struct ResolvedCredential {
     doctype: Option<String>,
     holder_binding: bool,
     claims: Value,
-    protocols: Option<Vec<String>>,
     transaction_data_types: Vec<TransactionDataType>,
     ts12_metadata: Vec<ResolvedTs12Metadata>,
 }
@@ -168,10 +164,9 @@ struct ResolvedFieldConfig {
 
 #[derive(Debug, Clone)]
 struct ResolvedTs12Metadata {
-    data_type: TransactionDataType,
+    data_type: Ts12DataType,
     claims: Vec<ResolvedTs12ClaimMetadata>,
     ui_labels: ResolvedTs12UiLabels,
-    schema: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -234,7 +229,6 @@ impl ResolvedTs12Metadata {
             data_type: self.data_type.clone(),
             claims,
             ui_labels,
-            schema: self.schema.clone(),
         }
     }
 }
@@ -243,7 +237,6 @@ impl ResolvedTs12Metadata {
 struct PackageStore {
     credentials: Vec<ResolvedCredential>,
     openid4vp: OpenId4VpConfig,
-    openid4vci: OpenId4VciConfig,
     log_level: Option<LogLevel>,
     dcql: PlanOptions,
 }
@@ -271,7 +264,6 @@ impl PackageStore {
         Ok(Self {
             credentials,
             openid4vp: config.openid4vp,
-            openid4vci: config.openid4vci,
             log_level: config.log_level,
             dcql: config.dcql,
         })
@@ -336,14 +328,32 @@ impl CredentialStore for PackageStore {
         cred: &Self::CredentialRef,
         transaction_data: &TransactionData,
     ) -> bool {
-        self.get(*cred)
-            .map(|credential| {
-                credential
-                    .transaction_data_types
-                    .iter()
-                    .any(|entry| entry == &transaction_data.data_type)
-            })
-            .unwrap_or(false)
+        let Some(credential) = self.get(*cred) else {
+            return false;
+        };
+        if !credential
+            .transaction_data_types
+            .iter()
+            .any(|entry| entry.r#type == transaction_data.r#type)
+        {
+            return false;
+        }
+
+        let requires_subtype = credential.ts12_metadata.iter().any(|meta| {
+            meta.data_type.r#type == transaction_data.r#type
+                && meta.data_type.subtype.is_some()
+        });
+        if !requires_subtype {
+            return true;
+        }
+
+        let Some(subtype) = transaction_data_subtype(transaction_data) else {
+            return false;
+        };
+        credential.ts12_metadata.iter().any(|meta| {
+            meta.data_type.r#type == transaction_data.r#type
+                && meta.data_type.subtype.as_deref() == Some(subtype)
+        })
     }
 
     fn has_claim_path(&self, cred: &Self::CredentialRef, path: &ClaimsPathPointer) -> bool {
@@ -391,6 +401,11 @@ impl MatcherStore for PackageStore {
             .unwrap_or(Cow::Borrowed(c8!("")))
     }
 
+    fn credential_icon(&self, cred: &Self::CredentialRef) -> Option<&[u8]> {
+        self.get(*cred)
+            .and_then(|credential| credential.icon.as_deref())
+    }
+
     fn credential_subtitle(&self, cred: &Self::CredentialRef) -> Option<Cow<'_, C8Str>> {
         self.get(*cred).and_then(|credential| {
             credential
@@ -416,11 +431,6 @@ impl MatcherStore for PackageStore {
                 .as_ref()
                 .map(|value| Cow::Borrowed(value.as_c8_str()))
         })
-    }
-
-    fn credential_icon(&self, cred: &Self::CredentialRef) -> Option<&[u8]> {
-        self.get(*cred)
-            .and_then(|credential| credential.icon.as_deref())
     }
 
     fn get_credential_field_label<'a>(
@@ -466,19 +476,20 @@ impl MatcherStore for PackageStore {
             .map(Cow::Owned)
     }
 
-    fn supports_protocol(&self, cred: &Self::CredentialRef, protocol: &str) -> bool {
-        self.get(*cred)
-            .and_then(|credential| credential.protocols.as_deref())
-            .map(|protocols| protocols.iter().any(|entry| entry == protocol))
-            .unwrap_or(false)
+    fn supports_protocol(&self, _cred: &Self::CredentialRef, _protocol: &str) -> bool {
+        true
+    }
+
+    fn verify_openid4vp_signed_request(
+        &self,
+        _protocol: &str,
+        _request: &dcapi_matcher::OpenId4VpSignedEnvelope,
+    ) -> bool {
+        true
     }
 
     fn openid4vp_config(&self) -> OpenId4VpConfig {
         self.openid4vp
-    }
-
-    fn openid4vci_config(&self) -> OpenId4VciConfig {
-        self.openid4vci
     }
 
     fn locales(&self) -> &[&str] {
@@ -495,14 +506,70 @@ impl MatcherStore for PackageStore {
         cred: &Self::CredentialRef,
         transaction_data: &dcapi_dcql::TransactionData,
     ) -> Option<Ts12TransactionMetadata<'a>> {
+        let data_type = ts12_data_type_from_transaction_data(transaction_data);
         self.get(*cred).and_then(|credential| {
             credential
                 .ts12_metadata
                 .iter()
-                .find(|entry| entry.data_type == transaction_data.data_type)
+                .find(|entry| entry.data_type == data_type)
                 .map(ResolvedTs12Metadata::as_borrowed)
         })
     }
+
+    fn ts12_payment_summary<'a>(
+        &'a self,
+        _cred: &Self::CredentialRef,
+        transaction_data: &dcapi_dcql::TransactionData,
+        payload: &Value,
+        _metadata: &Ts12TransactionMetadata<'a>,
+        _locale: &str,
+    ) -> Option<Ts12PaymentSummary<'a>> {
+        if transaction_data.r#type != "urn:eudi:sca:payment:1" {
+            return None;
+        }
+
+        let (merchant, amount) = payment_summary_fields(payload);
+        Some(Ts12PaymentSummary {
+            merchant_name: Cow::Owned(merchant),
+            transaction_amount: Cow::Owned(amount),
+            additional_info: None,
+        })
+    }
+}
+
+fn payment_summary_fields(payload: &Value) -> (C8String, C8String) {
+    let mut merchant = "";
+    let mut currency = "";
+    let mut amount_value: Option<String> = None;
+
+    if let Some(obj) = payload.as_object() {
+        if let Some(payee) = obj.get("payee").and_then(Value::as_object) {
+            merchant = payee
+                .get("name")
+                .and_then(Value::as_str)
+                .or_else(|| payee.get("id").and_then(Value::as_str))
+                .unwrap_or("");
+        }
+        currency = obj.get("currency").and_then(Value::as_str).unwrap_or("");
+        if let Some(amount) = obj.get("amount") {
+            amount_value = match amount {
+                Value::Number(num) => Some(num.to_string()),
+                Value::String(text) => Some(text.clone()),
+                _ => None,
+            };
+        }
+    }
+
+    let transaction_amount = match (amount_value, currency.is_empty()) {
+        (Some(amount), false) => format!("{amount} {currency}"),
+        (Some(amount), true) => amount,
+        (None, false) => currency.to_string(),
+        (None, true) => String::new(),
+    };
+
+    let merchant_c8 = c8string_from_str(merchant).unwrap_or_default();
+    let amount_c8 = c8string_from_str(&transaction_amount).unwrap_or_default();
+    (merchant_c8, amount_c8)
 }
 
 fn resolve_credential(
@@ -547,7 +614,9 @@ fn resolve_credential(
         .collect::<Vec<_>>();
     let transaction_data_types = ts12_metadata
         .iter()
-        .map(|entry| entry.data_type.clone())
+        .map(|entry| TransactionDataType {
+            r#type: entry.data_type.r#type.clone(),
+        })
         .collect();
 
     Ok(ResolvedCredential {
@@ -564,7 +633,6 @@ fn resolve_credential(
         doctype: credential.doctype,
         holder_binding,
         claims,
-        protocols: credential.protocols,
         transaction_data_types,
         ts12_metadata,
     })
@@ -606,7 +674,6 @@ fn resolve_ts12_metadata(config: Ts12MetadataConfig) -> ResolvedTs12Metadata {
         data_type: config.data_type,
         claims,
         ui_labels,
-        schema: config.schema,
     }
 }
 
@@ -657,6 +724,20 @@ fn value_from_claims<'a>(claims: &'a Value, path: &ClaimsPathPointer) -> Option<
     nodes.first().and_then(|value| value.as_str())
 }
 
+fn transaction_data_subtype(transaction_data: &TransactionData) -> Option<&str> {
+    transaction_data
+        .extra
+        .get("subtype")
+        .and_then(Value::as_str)
+}
+
+fn ts12_data_type_from_transaction_data(transaction_data: &TransactionData) -> Ts12DataType {
+    Ts12DataType {
+        r#type: transaction_data.r#type.clone(),
+        subtype: transaction_data_subtype(transaction_data).map(|value| value.to_string()),
+    }
+}
+
 fn path_has_wildcard(path: &ClaimsPathPointer) -> bool {
     path.iter()
         .any(|segment| matches!(segment, PathElement::Wildcard))
@@ -690,6 +771,7 @@ fn decode_icon(icon: IconConfig) -> Result<Option<Vec<u8>>, String> {
 #[dcapi_matcher]
 fn matcher_entrypoint(store: PackageStore) {
     dcapi_matcher::diagnostics::set_level(store.log_level);
+    info(get_request_string());
     let options = MatcherOptions {
         dcql: store.dcql_options(),
     };
@@ -697,4 +779,113 @@ fn matcher_entrypoint(store: PackageStore) {
         return;
     };
     matched.render();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dcapi_dcql::{CredentialSetOptionMode, OptionalCredentialSetsMode};
+    use dcapi_matcher::{CredentialEntry, MatcherOptions, MatcherResult};
+    use serde_json::json;
+    use std::io::Cursor;
+    use std::sync::Mutex;
+
+    static REQUEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn package_payload() -> &'static str {
+        r#"{"default_id_prefix":"cred-","openid4vp":{"enabled":true,"allow_dcql":true,"allow_transaction_data":true,"allow_signed_requests":true,"allow_response_mode_jwt":true},"dcql":{"credential_set_option_mode":"first_satisfiable_only","optional_credential_sets_mode":"prefer_present"},"credentials":[{"id":"mdoc-1","format":"mso_mdoc","title":"Drivers License","subtitle":"Issued by Utopia","icon":"/9j/4AAQSkZJRgABAQEASABIAAD//gATQ3JlYXRlZCB3aXRoIEdJTVD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wgARCABLAGQDAREAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAWAQEBAQAAAAAAAAAAAAAAAAAABgj/2gAMAwEAAhADEAAAAZzC6pAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAABw/9oACAEBAAEFAgL/xAAUEQEAAAAAAAAAAAAAAAAAAABw/9oACAEDAQE/AQL/xAAUEQEAAAAAAAAAAAAAAAAAAABw/9oACAECAQE/AQL/xAAUEAEAAAAAAAAAAAAAAAAAAABw/9oACAEBAAY/AgL/xAAUEAEAAAAAAAAAAAAAAAAAAABw/9oACAEBAAE/IQL/2gAMAwEAAgADAAAAEP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/8QAFBEBAAAAAAAAAAAAAAAAAAAAcP/aAAgBAwEBPxAC/8QAFBEBAAAAAAAAAAAAAAAAAAAAcP/aAAgBAgEBPxAC/8QAFBABAAAAAAAAAAAAAAAAAAAAcP/aAAgBAQABPxAC/9k=","doctype":"org.iso.18013.5.1.mDL","fields":[{"path":["org.iso.18013.5.1","family_name"],"display_name":"Family Name"},{"path":["org.iso.18013.5.1","given_name"],"display_name":"Given Name"}],"claims":{"org.iso.18013.5.1":{"family_name":"Glastra","given_name":"Timo"}}},{"id":"pid-1","format":"dc+sd-jwt","title":"PID","subtitle":"Issued by Utopia","icon":"/9j/4AAQSkZJRgABAQEASABIAAD//gATQ3JlYXRlZCB3aXRoIEdJTVD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wgARCABLAGQDAREAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAWAQEBAQAAAAAAAAAAAAAAAAAABgj/2gAMAwEAAhADEAAAAZzC6pAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAABw/9oACAEBAAEFAgL/xAAUEQEAAAAAAAAAAAAAAAAAAABw/9oACAEDAQE/AQL/xAAUEQEAAAAAAAAAAAAAAAAAAABw/9oACAECAQE/AQL/xAAUEAEAAAAAAAAAAAAAAAAAAABw/9oACAEBAAY/AgL/xAAUEAEAAAAAAAAAAAAAAAAAAABw/9oACAEBAAE/IQL/2gAMAwEAAgADAAAAEP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/8QAFBEBAAAAAAAAAAAAAAAAAAAAcP/aAAgBAwEBPxAC/8QAFBEBAAAAAAAAAAAAAAAAAAAAcP/aAAgBAgEBPxAC/8QAFBABAAAAAAAAAAAAAAAAAAAAcP/aAAgBAQABPxAC/9k=","vcts":["eu.europa.ec.eudi.pid.1"],"claims":{"first_name":"Timo","address":{"city":"Somewhere"}}}],"log_level":"debug"}"#
+    }
+
+    #[test]
+    fn parses_credential_package_fixture() {
+        let mut cursor = Cursor::new(package_payload().as_bytes());
+        let store = PackageStore::from_reader(&mut cursor).expect("package should parse");
+
+        assert_eq!(store.credentials.len(), 2);
+        assert_eq!(store.credentials[0].id.as_c8_str().as_str(), "mdoc-1");
+        assert_eq!(store.credentials[0].doctype.as_deref(), Some("org.iso.18013.5.1.mDL"));
+        assert_eq!(store.credentials[0].fields.len(), 2);
+        assert_eq!(store.credentials[1].id.as_c8_str().as_str(), "pid-1");
+        assert_eq!(store.credentials[1].vcts, vec!["eu.europa.ec.eudi.pid.1".to_string()]);
+        assert!(matches!(store.log_level, Some(LogLevel::Debug)));
+        assert_eq!(store.dcql.credential_set_option_mode, CredentialSetOptionMode::FirstSatisfiableOnly);
+        assert_eq!(store.dcql.optional_credential_sets_mode, OptionalCredentialSetsMode::PreferPresent);
+    }
+
+
+    #[test]
+    fn matches_mdl_claims_for_dcql_request() {
+        let _guard = REQUEST_LOCK.lock().unwrap();
+        let mut cursor = Cursor::new(package_payload().as_bytes());
+        let store = PackageStore::from_reader(&mut cursor).expect("package should parse");
+        let request = json!({
+            "requests": [{
+                "protocol": "openid4vp-v1-unsigned",
+                "data": {
+                    "dcql_query": {
+                        "credentials": [{
+                            "id": "0",
+                            "format": "mso_mdoc",
+                            "meta": { "doctype_value": "org.iso.18013.5.1.mDL" },
+                            "claims": [
+                                {
+                                    "id": "given_name",
+                                    "path": ["org.iso.18013.5.1", "given_name"],
+                                    "intent_to_retain": false
+                                },
+                                {
+                                    "id": "family_name",
+                                    "path": ["org.iso.18013.5.1", "family_name"],
+                                    "intent_to_retain": false
+                                }
+                            ]
+                        }],
+                        "credential_sets": [{
+                            "options": [["0"]],
+                            "purpose": "mDL (mdoc) - Names"
+                        }]
+                    }
+                }
+            }]
+        })
+        .to_string();
+
+        android_credman_sys::test_shim::set_request(request.as_bytes());
+
+        let options = MatcherOptions {
+            dcql: store.dcql_options(),
+        };
+        let response =
+            match_dc_api_request(&store, &options, &DefaultProfile).expect("match should succeed");
+        assert!(!response.results.is_empty());
+
+        let set = match &response.results[0] {
+            MatcherResult::Group(set) => set,
+            other => panic!("expected group result, got {other:?}"),
+        };
+        let entry = set
+            .slots
+            .first()
+            .and_then(|slot| slot.alternatives.first())
+            .expect("expected entry");
+        let fields = match entry {
+            CredentialEntry::StringId(entry) => entry.fields.as_ref(),
+            CredentialEntry::Payment(entry) => entry.fields.as_ref(),
+        };
+
+        let mut has_family = false;
+        let mut has_given = false;
+        for field in fields {
+            let name = field.display_name.to_str().unwrap_or("");
+            let value = field.display_value.and_then(|value| value.to_str().ok()).unwrap_or("");
+            if name == "Family Name" && value == "Glastra" {
+                has_family = true;
+            }
+            if name == "Given Name" && value == "Timo" {
+                has_given = true;
+            }
+        }
+        assert!(has_family, "expected Family Name field");
+        assert!(has_given, "expected Given Name field");
+    }
 }

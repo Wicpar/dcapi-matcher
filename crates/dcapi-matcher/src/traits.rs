@@ -1,6 +1,6 @@
-use crate::config::{OpenId4VciConfig, OpenId4VpConfig};
+use crate::config::OpenId4VpConfig;
 use crate::diagnostics::LogLevel;
-use crate::models::PROTOCOL_OPENID4VP;
+use crate::models::{OpenId4VpSignedEnvelope, PROTOCOL_OPENID4VP};
 use crate::ts12::{Ts12PaymentSummary, Ts12TransactionMetadata};
 use alloc::borrow::Cow;
 use c8str::C8Str;
@@ -89,14 +89,21 @@ pub trait MatcherStore: CredentialStore {
         false
     }
 
+    /// Verifies a signed OpenID4VP request.
+    ///
+    /// Return `true` when the request signatures are verified under a supported trust
+    /// framework. Default rejects all signed requests.
+    fn verify_openid4vp_signed_request(
+        &self,
+        _protocol: &str,
+        _request: &OpenId4VpSignedEnvelope,
+    ) -> bool {
+        false
+    }
+
     /// Returns wallet-level OpenID4VP support configuration.
     fn openid4vp_config(&self) -> OpenId4VpConfig {
         OpenId4VpConfig::default()
-    }
-
-    /// Returns wallet-level OpenID4VCI support configuration.
-    fn openid4vci_config(&self) -> OpenId4VciConfig {
-        OpenId4VciConfig::default()
     }
 
     /// Locales (RFC5646 identifiers) for UI rendering, in priority order.
@@ -111,9 +118,7 @@ pub trait MatcherStore: CredentialStore {
     ///
     /// Implementers must resolve any `claims_uri` / `ui_labels_uri` references and apply
     /// `extends` merging rules before returning this metadata. The returned metadata must
-    /// already contain the concrete JSON Schema object and the matching `type`/`subtype`;
-    /// the matcher does not resolve schema URLs or built-in types, and it forbids external
-    /// `$ref` references during validation. Return `None` when the credential does not
+    /// already contain the matching `type`/`subtype`. Return `None` when the credential does not
     /// support the provided transaction data type.
     fn ts12_transaction_metadata<'a>(
         &'a self,

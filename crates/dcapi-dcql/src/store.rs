@@ -78,7 +78,7 @@ pub trait CredentialStore {
 
     /// Returns true if the credential can sign for the provided transaction data constraint.
     ///
-    /// Implementations should validate both the type/subtype and any associated
+    /// Implementations should validate the transaction-data type and any associated
     /// metadata structure required by the wallet policy.
     fn can_sign_transaction_data(
         &self,

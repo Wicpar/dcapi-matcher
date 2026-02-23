@@ -306,7 +306,10 @@ where
 
     match query.meta() {
         Some(Meta::IsoMdoc(meta)) => store.has_doctype(cred, &meta.doctype_value),
-        Some(Meta::SdJwtVc(meta)) => meta.vct_values.iter().any(|v| store.has_vct(cred, v)),
+        Some(Meta::SdJwtVc(meta)) => match meta.vct_values.as_deref() {
+            None => true,
+            Some(values) => values.iter().any(|v| store.has_vct(cred, v)),
+        },
         None => false,
     }
 }

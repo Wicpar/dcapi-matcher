@@ -13,8 +13,17 @@ pub const PROTOCOL_OPENID4VP_V1_UNSIGNED: &str = "openid4vp-v1-unsigned";
 pub const PROTOCOL_OPENID4VP_V1_SIGNED: &str = "openid4vp-v1-signed";
 /// Protocol identifier for OpenID4VP multi-signed requests in DC API.
 pub const PROTOCOL_OPENID4VP_V1_MULTISIGNED: &str = "openid4vp-v1-multisigned";
-/// Protocol identifier for OpenID4VCI requests in DC API.
-pub const PROTOCOL_OPENID4VCI: &str = "openid4vci";
+
+/// TS12 transaction data type discriminator (OpenID4VP-specific).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct Ts12DataType {
+    /// Transaction data type identifier.
+    #[serde(rename = "type")]
+    pub r#type: String,
+    /// Optional type-specific subtype discriminator.
+    #[serde(default)]
+    pub subtype: Option<String>,
+}
 
 /// Root request envelope passed by DC API to matchers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,11 +34,93 @@ pub struct DcApiRequest {
 
 /// One protocol request in the DC API request list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DcApiRequestItem {
-    /// Protocol identifier.
-    pub protocol: String,
-    /// Request body for the protocol.
-    pub data: RequestData,
+#[serde(tag = "protocol")]
+pub enum DcApiRequestItem {
+    /// OpenID4VP over DC API (unsigned).
+    #[serde(rename = "openid4vp-v1-unsigned", alias = "openid4vp")]
+    OpenId4VpUnsigned { data: OpenId4VpUnsignedData },
+    /// OpenID4VP over DC API (signed JWS compact).
+    #[serde(rename = "openid4vp-v1-signed")]
+    OpenId4VpSigned { data: OpenId4VpSignedData },
+    /// OpenID4VP over DC API (signed JWS JSON serialization).
+    #[serde(rename = "openid4vp-v1-multisigned")]
+    OpenId4VpMultiSigned { data: OpenId4VpMultiSignedData },
+    /// Unknown protocol (ignored by matcher).
+    #[serde(other)]
+    Unknown,
+}
+
+/// OpenID4VP unsigned request data payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OpenId4VpUnsignedData {
+    /// Request parameters as JSON object.
+    Params(OpenId4VpRequest),
+    /// Request parameters encoded as JSON string.
+    JsonString(String),
+}
+
+/// OpenID4VP signed request data payload (JWS compact).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenId4VpSignedData {
+    /// JWS compact request object.
+    pub request: String,
+}
+
+/// OpenID4VP multi-signed request data payload (JWS JSON serialization).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenId4VpMultiSignedData {
+    /// Base64url-encoded JWS payload.
+    pub payload: String,
+    /// Signature list (JWS JSON serialization).
+    pub signatures: Vec<OpenId4VpJwsSignature>,
+}
+
+/// Parsed and decoded signed OpenID4VP request envelope.
+#[derive(Debug, Clone)]
+pub struct OpenId4VpSignedEnvelope {
+    /// JWS serialization format.
+    pub format: OpenId4VpSignedFormat,
+    /// Base64url-encoded payload segment.
+    pub payload_b64: String,
+    /// Decoded payload JSON.
+    pub payload: Value,
+    /// Signature entries.
+    pub signatures: Vec<OpenId4VpSignedSignature>,
+}
+
+/// JWS serialization format for signed OpenID4VP requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenId4VpSignedFormat {
+    /// JWS Compact Serialization.
+    Compact,
+    /// JWS JSON Serialization.
+    Json,
+}
+
+/// Parsed signature entry for a signed OpenID4VP request.
+#[derive(Debug, Clone)]
+pub struct OpenId4VpSignedSignature {
+    /// Base64url-encoded protected header.
+    pub protected_b64: String,
+    /// Decoded protected header JSON.
+    pub protected: Value,
+    /// Base64url-encoded signature.
+    pub signature_b64: String,
+    /// Optional unprotected header.
+    pub header: Option<Value>,
+}
+
+/// JWS JSON serialization signature entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenId4VpJwsSignature {
+    /// Base64url-encoded protected header.
+    pub protected: String,
+    /// Base64url-encoded signature.
+    pub signature: String,
+    /// Optional unprotected header.
+    #[serde(default)]
+    pub header: Option<Value>,
 }
 
 /// Raw protocol request payload.
@@ -65,10 +156,16 @@ pub struct OpenId4VpRequest {
     pub response_type: Option<String>,
     /// Response mode parameter.
     pub response_mode: Option<String>,
+    /// Nonce parameter for replay protection.
+    pub nonce: Option<String>,
+    /// Verifier client metadata (OpenID4VP).
+    pub client_metadata: Option<Value>,
     /// DCQL query request.
     pub dcql_query: Option<DcqlQuery>,
     /// Transaction data constraints as defined by OpenID4VP.
     pub transaction_data: Option<Vec<TransactionDataInput>>,
+    /// Verifier info object (OpenID4VP).
+    pub verifier_info: Option<Value>,
     /// Legacy Presentation Exchange request (ignored by matcher).
     pub presentation_definition: Option<Value>,
     /// Preserved unknown fields.
@@ -84,62 +181,4 @@ pub enum TransactionDataInput {
     Encoded(String),
     /// Decoded JSON object.
     Decoded(Box<dcapi_dcql::TransactionData>),
-}
-
-/// OpenID4VCI request payload used by the matcher.
-///
-/// This supports both direct `credential_offer` wrapper and direct
-/// offer objects through `decode_openid4vci_request`.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct OpenId4VciRequest {
-    /// Credential Offer by value.
-    pub credential_offer: Option<CredentialOffer>,
-    /// Credential Offer by reference (not fetched by this matcher).
-    pub credential_offer_uri: Option<String>,
-    /// Optional issuer metadata supplied with request.
-    pub credential_issuer_metadata: Option<CredentialIssuerMetadata>,
-    /// Preserved unknown fields.
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, Value>,
-}
-
-/// OpenID4VCI Credential Offer object.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CredentialOffer {
-    /// Credential Issuer identifier.
-    pub credential_issuer: String,
-    /// Offered credential configuration identifiers.
-    #[serde(default)]
-    pub credential_configuration_ids: Vec<String>,
-    /// Supported grants.
-    #[serde(default)]
-    pub grants: serde_json::Map<String, Value>,
-    /// Preserved unknown fields.
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, Value>,
-}
-
-/// Minimal issuer metadata subset used by matcher for OpenID4VCI.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CredentialIssuerMetadata {
-    /// Credential configurations indexed by `credential_configuration_id`.
-    #[serde(default)]
-    pub credential_configurations_supported: serde_json::Map<String, Value>,
-    /// Preserved unknown fields.
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, Value>,
-}
-
-impl OpenId4VciRequest {
-    /// Returns the active credential offer, if available.
-    pub fn credential_offer(&self) -> Option<&CredentialOffer> {
-        self.credential_offer.as_ref()
-    }
-
-    /// Looks up configuration metadata for a configuration id.
-    pub fn credential_configuration(&self, id: &str) -> Option<&Value> {
-        self.credential_issuer_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.credential_configurations_supported.get(id))
-    }
 }

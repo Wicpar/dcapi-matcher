@@ -15,13 +15,13 @@ pub use android_credman::{
     CredentialEntry, CredentialSet, CredentialSlot, Field, InlineIssuanceEntry, MatcherResponse,
     MatcherResult, PaymentEntry, StringIdEntry,
 };
-pub use config::{OpenId4VciConfig, OpenId4VpConfig};
+pub use config::OpenId4VpConfig;
 pub use dcapi_matcher_macros::dcapi_matcher;
 pub use diagnostics::LogLevel;
 pub use engine::{MatcherOptions, decode_request_data, match_dc_api_request};
 pub use error::{
-    CredentialPackageError, MatcherError, OpenId4VciError, OpenId4VpError, RequestDataError,
-    Ts12Error, Ts12MetadataError,
+    CredentialPackageError, MatcherError, OpenId4VpError, RequestDataError, Ts12Error,
+    Ts12MetadataError,
 };
 pub use models::*;
 pub use profile::{DefaultProfile, HaipProfile, HaipProfileError, Profile, ProfileError};
